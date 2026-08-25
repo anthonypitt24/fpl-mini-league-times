@@ -1,11 +1,11 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
 import json
 import os
-import io
-import re
+import time
+from datetime import datetime
+from collections import defaultdict
 
 # ============================================================
 # OPTIONAL GEMINI AI
@@ -16,27 +16,6 @@ try:
     GEMINI_AVAILABLE = True
 except Exception:
     GEMINI_AVAILABLE = False
-
-# ============================================================
-# OPTIONAL PDF
-# ============================================================
-
-try:
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER
-    from reportlab.platypus import (
-        SimpleDocTemplate,
-        Paragraph,
-        Spacer,
-        PageBreak
-    )
-    from reportlab.lib.units import mm
-
-    REPORTLAB_AVAILABLE = True
-
-except Exception:
-    REPORTLAB_AVAILABLE = False
 
 
 # ============================================================
@@ -68,7 +47,7 @@ st.markdown("""
 .subtitle {
     text-align: center;
     font-size: 18px;
-    color: #666;
+    color: #777;
     margin-bottom: 30px;
 }
 
@@ -80,7 +59,7 @@ st.markdown("""
 
 .story {
     background: #f7f7f7;
-    padding: 20px;
+    padding: 22px;
     border-radius: 12px;
     margin-bottom: 15px;
 }
@@ -89,7 +68,7 @@ st.markdown("""
     border: 1px solid #ddd;
     border-radius: 12px;
     padding: 18px;
-    min-height: 170px;
+    min-height: 190px;
 }
 
 .big-number {
@@ -102,17 +81,11 @@ st.markdown("""
     font-size: 14px;
 }
 
-.download-box {
-    padding: 20px;
-    border: 1px solid #ddd;
-    border-radius: 12px;
-    margin-top: 20px;
-    margin-bottom: 20px;
-}
-
-hr {
-    margin-top: 25px;
-    margin-bottom: 25px;
+.warning-box {
+    padding: 15px;
+    border-radius: 10px;
+    background: #fff3cd;
+    border: 1px solid #ffe69c;
 }
 
 </style>
@@ -125,34 +98,44 @@ hr {
 
 BASE = "https://fantasy.premierleague.com/api"
 
+# YOUR MINI-LEAGUE
+LEAGUE_ID = "637276"
+
 HEADERS = {
-    "User-Agent": "Mozilla/5.0"
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    ),
+    "Accept": "application/json"
 }
 
 
 # ============================================================
-# API HELPERS
+# API HELPER
 # ============================================================
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
 def get_json(url):
 
     try:
 
-        r = requests.get(
+        response = requests.get(
             url,
             headers=HEADERS,
-            timeout=15
+            timeout=20
         )
 
-        r.raise_for_status()
+        response.raise_for_status()
 
-        return r.json()
+        return response.json()
 
     except Exception:
-
         return None
 
+
+# ============================================================
+# FPL DATA
+# ============================================================
 
 @st.cache_data(ttl=300)
 def get_bootstrap():
@@ -163,16 +146,14 @@ def get_bootstrap():
 
 
 @st.cache_data(ttl=300)
-def get_league(league_id):
+def get_league():
 
-    url = (
-        f"{BASE}/leagues-classic/{league_id}/standings/"
+    return get_json(
+        f"{BASE}/leagues-classic/{LEAGUE_ID}/standings/"
         f"?page_new_entries=1"
         f"&page_standings=1"
         f"&phase=1"
     )
-
-    return get_json(url)
 
 
 @st.cache_data(ttl=300)
@@ -183,7 +164,7 @@ def get_manager_history(manager_id):
     )
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
 def get_manager_picks(manager_id, gw):
 
     return get_json(
@@ -191,46 +172,76 @@ def get_manager_picks(manager_id, gw):
     )
 
 
-@st.cache_data(ttl=300)
-def get_manager_info(manager_id):
+@st.cache_data(ttl=120)
+def get_live_gameweek(gw):
 
     return get_json(
-        f"{BASE}/entry/{manager_id}/"
+        f"{BASE}/event/{gw}/live/"
+    )
+
+
+@st.cache_data(ttl=300)
+def get_fixtures(gw):
+
+    return get_json(
+        f"{BASE}/fixtures/?event={gw}"
     )
 
 
 # ============================================================
-# FIND CURRENT GAMEWEEK
+# CURRENT GAMEWEEK
 # ============================================================
 
 def get_current_gameweek(data):
 
-    events = data.get(
-        "events",
-        []
-    )
+    if not data:
+        return 1
+
+    events = data.get("events", [])
 
     for event in events:
 
         if event.get("is_current"):
-
             return event["id"]
 
     finished = [
-
         e["id"]
-
         for e in events
-
         if e.get("finished")
-
     ]
 
     if finished:
-
         return max(finished)
 
     return 1
+
+
+# ============================================================
+# GAMEWEEK STATUS
+# ============================================================
+
+def get_gameweek_status(data, gw):
+
+    if not data:
+        return "Unknown"
+
+    for event in data.get("events", []):
+
+        if event.get("id") == gw:
+
+            if event.get("finished"):
+                return "Finished"
+
+            if event.get("data_checked"):
+                return "Data checked"
+
+            if event.get("is_current"):
+                return "LIVE"
+
+            if event.get("is_next"):
+                return "Upcoming"
+
+    return "Unknown"
 
 
 # ============================================================
@@ -240,76 +251,143 @@ def get_current_gameweek(data):
 def build_player_lookup(data):
 
     teams = {
-
-        t["id"]: t["name"]
-
-        for t in data.get(
-            "teams",
-            []
-        )
-
+        team["id"]: team["name"]
+        for team in data.get("teams", [])
     }
 
     players = {}
 
-    for p in data.get(
-        "elements",
-        []
-    ):
+    for player in data.get("elements", []):
 
-        first = p.get(
-            "first_name",
-            ""
-        )
+        players[player["id"]] = {
 
-        second = p.get(
-            "second_name",
-            ""
-        )
+            "name": (
+                f"{player.get('first_name', '')} "
+                f"{player.get('second_name', '')}"
+            ).strip(),
 
-        players[p["id"]] = {
+            "short_name": player.get(
+                "web_name",
+                "Unknown"
+            ),
 
-            "name":
-                f"{first} {second}".strip(),
+            "team": teams.get(
+                player.get("team"),
+                "Unknown"
+            ),
 
-            "short_name":
-                p.get(
-                    "web_name",
-                    ""
-                ),
+            "position": player.get(
+                "element_type"
+            ),
 
-            "team":
-                teams.get(
-                    p.get("team"),
-                    "?"
-                ),
+            "price": (
+                player.get("now_cost", 0) / 10
+            ),
 
-            "position":
-                p.get(
-                    "element_type"
-                ),
-
-            "points":
-                p.get(
-                    "total_points",
-                    0
-                ),
-
-            "price":
-                p.get(
-                    "now_cost",
-                    0
-                ) / 10
+            "total_points": player.get(
+                "total_points",
+                0
+            )
         }
 
     return players
 
 
 # ============================================================
-# MINI LEAGUE DATA
+# LIVE PLAYER POINTS
+# ============================================================
+
+def build_live_points(live_data):
+
+    points = {}
+
+    if not live_data:
+        return points
+
+    for player in live_data.get(
+        "elements",
+        []
+    ):
+
+        player_id = player.get("id")
+
+        stats = player.get(
+            "stats",
+            {}
+        )
+
+        points[player_id] = {
+
+            "total_points": stats.get(
+                "total_points",
+                0
+            ),
+
+            "minutes": stats.get(
+                "minutes",
+                0
+            ),
+
+            "goals": stats.get(
+                "goals_scored",
+                0
+            ),
+
+            "assists": stats.get(
+                "assists",
+                0
+            ),
+
+            "bonus": stats.get(
+                "bonus",
+                0
+            ),
+
+            "bps": stats.get(
+                "bps",
+                0
+            )
+        }
+
+    return points
+
+
+# ============================================================
+# FIXTURE STATUS
+# ============================================================
+
+def get_fixture_status(fixtures):
+
+    if not fixtures:
+        return {
+            "finished": False,
+            "started": False
+        }
+
+    started = any(
+        fixture.get("started")
+        for fixture in fixtures
+    )
+
+    finished = all(
+        fixture.get("finished")
+        for fixture in fixtures
+    )
+
+    return {
+        "started": started,
+        "finished": finished
+    }
+
+
+# ============================================================
+# GET MANAGERS
 # ============================================================
 
 def get_all_league_managers(league):
+
+    if not league:
+        return []
 
     standings = league.get(
         "standings",
@@ -323,252 +401,127 @@ def get_all_league_managers(league):
 
 
 # ============================================================
+# FIND HISTORY FOR GAMEWEEK
+# ============================================================
+
+def get_history_for_gw(history, gw):
+
+    if not history:
+        return None
+
+    for row in history.get(
+        "current",
+        []
+    ):
+
+        if row.get("event") == gw:
+            return row
+
+    return None
+
+
+# ============================================================
 # MANAGER ANALYSIS
 # ============================================================
 
 def analyse_manager(
     manager,
     gw,
-    players
+    players,
+    live_points
 ):
 
-    manager_id = manager["entry"]
+    manager_id = manager.get(
+        "entry"
+    )
+
+    if not manager_id:
+        return None
+
+    # --------------------------------------------------------
+    # HISTORY
+    # --------------------------------------------------------
 
     history = get_manager_history(
         manager_id
     )
 
-    picks = get_manager_picks(
+    history_row = get_history_for_gw(
+        history,
+        gw
+    )
+
+    # --------------------------------------------------------
+    # PICKS
+    # --------------------------------------------------------
+
+    picks_data = get_manager_picks(
         manager_id,
         gw
     )
 
-    if not history:
-
+    if not picks_data:
         return None
 
-    current_history = None
-
-    for event in history.get(
-        "current",
-        []
-    ):
-
-        if event.get("event") == gw:
-
-            current_history = event
-
-            break
-
-    if not current_history:
-
-        return None
-
-    if not picks:
-
-        return None
-
-    squad = picks.get(
+    picks = picks_data.get(
         "picks",
         []
     )
 
     # --------------------------------------------------------
-    # Starting XI
+    # FPL OFFICIAL GAMEWEEK DATA
     # --------------------------------------------------------
 
-    starting = [
-
-        p
-
-        for p in squad
-
-        if p.get(
-            "position",
-            0
-        ) <= 11
-    ]
-
-    # --------------------------------------------------------
-    # Bench
-    # --------------------------------------------------------
-
-    bench = [
-
-        p
-
-        for p in squad
-
-        if p.get(
-            "position",
-            0
-        ) > 11
-    ]
-
-    # --------------------------------------------------------
-    # Captain
-    # --------------------------------------------------------
-
-    captain = next(
-
-        (
-            p
-
-            for p in squad
-
-            if p.get(
-                "is_captain"
-            )
-        ),
-
-        None
+    entry_history = picks_data.get(
+        "entry_history",
+        {}
     )
 
-    # --------------------------------------------------------
-    # Vice
-    # --------------------------------------------------------
-
-    vice = next(
-
-        (
-            p
-
-            for p in squad
-
-            if p.get(
-                "is_vice_captain"
-            )
-        ),
-
-        None
-    )
-
-    # --------------------------------------------------------
-    # Helpers
-    # --------------------------------------------------------
-
-    def player_name(p):
-
-        if not p:
-
-            return "Unknown"
-
-        return players.get(
-
-            p.get("element"),
-
-            {}
-
-        ).get(
-
-            "short_name",
-
-            "Unknown"
-        )
-
-    def player_points(p):
-
-        if not p:
-
-            return 0
-
-        return p.get(
-            "stats",
-            {}
-        ).get(
-            "total_points",
-            0
+    # Prefer picks entry history.
+    # Fall back to manager history.
+    if not entry_history:
+        entry_history = (
+            history_row
+            if history_row
+            else {}
         )
 
     # --------------------------------------------------------
-    # Captain
+    # OFFICIAL FPL POINTS
     # --------------------------------------------------------
 
-    captain_name = player_name(
-        captain
+    gw_points = entry_history.get(
+        "points",
+        0
     )
 
-    captain_points = player_points(
-        captain
+    total_points = entry_history.get(
+        "total_points",
+        0
     )
 
-    captain_multiplier = (
-
-        captain.get(
-            "multiplier",
-            1
-        )
-
-        if captain
-
-        else 1
-    )
-
-    captain_effective = (
-
-        captain_points
-        *
-        captain_multiplier
-    )
-
-    # --------------------------------------------------------
-    # Bench
-    # --------------------------------------------------------
-
-    bench_points = sum(
-
-        player_points(p)
-
-        for p in bench
-    )
-
-    # --------------------------------------------------------
-    # Starting XI
-    # --------------------------------------------------------
-
-    starting_points = sum(
-
-        player_points(p)
-
-        *
-        p.get(
-            "multiplier",
-            1
-        )
-
-        for p in starting
-    )
-
-    # --------------------------------------------------------
-    # Transfers
-    # --------------------------------------------------------
-
-    transfers = current_history.get(
+    transfer_count = entry_history.get(
         "event_transfers",
         0
     )
 
-    transfer_cost = current_history.get(
+    transfer_cost = entry_history.get(
         "event_transfers_cost",
         0
     )
 
-    # --------------------------------------------------------
-    # Overall Rank
-    # --------------------------------------------------------
-
-    rank = current_history.get(
+    overall_rank = entry_history.get(
         "overall_rank",
         0
     )
 
-    last_rank = current_history.get(
+    previous_overall_rank = entry_history.get(
         "last_rank",
-        rank
+        overall_rank
     )
 
     # --------------------------------------------------------
-    # League Position
+    # MINI LEAGUE POSITION
     # --------------------------------------------------------
 
     league_position = manager.get(
@@ -577,135 +530,326 @@ def analyse_manager(
     )
 
     # --------------------------------------------------------
-    # Biggest Bench Regret
+    # STARTERS / BENCH
     # --------------------------------------------------------
 
-    bench_sorted = sorted(
+    starting = [
+        player
+        for player in picks
+        if player.get("position", 0) <= 11
+    ]
 
-        bench,
-
-        key=lambda x:
-            player_points(x),
-
-        reverse=True
-    )
-
-    biggest_bench = (
-
-        bench_sorted[0]
-
-        if bench_sorted
-
-        else None
-    )
-
-    biggest_bench_name = player_name(
-        biggest_bench
-    )
-
-    biggest_bench_points = player_points(
-        biggest_bench
-    )
-
-    # --------------------------------------------------------
-    # Starting XI Names
-    # --------------------------------------------------------
-
-    starting_names = [
-
-        player_name(p)
-
-        for p in starting
+    bench = [
+        player
+        for player in picks
+        if player.get("position", 0) > 11
     ]
 
     # --------------------------------------------------------
-    # Return
+    # CAPTAIN
+    # --------------------------------------------------------
+
+    captain = next(
+        (
+            player
+            for player in picks
+            if player.get("is_captain")
+        ),
+        None
+    )
+
+    vice = next(
+        (
+            player
+            for player in picks
+            if player.get("is_vice_captain")
+        ),
+        None
+    )
+
+    # --------------------------------------------------------
+    # PLAYER HELPERS
+    # --------------------------------------------------------
+
+    def player_name(player):
+
+        if not player:
+            return "Unknown"
+
+        player_id = player.get(
+            "element"
+        )
+
+        return players.get(
+            player_id,
+            {}
+        ).get(
+            "short_name",
+            "Unknown"
+        )
+
+    def player_points(player):
+
+        if not player:
+            return 0
+
+        player_id = player.get(
+            "element"
+        )
+
+        live = live_points.get(
+            player_id,
+            {}
+        )
+
+        return live.get(
+            "total_points",
+            0
+        )
+
+    # --------------------------------------------------------
+    # CAPTAIN POINTS
+    # --------------------------------------------------------
+
+    captain_name = player_name(
+        captain
+    )
+
+    captain_raw_points = player_points(
+        captain
+    )
+
+    captain_multiplier = (
+        captain.get(
+            "multiplier",
+            2
+        )
+        if captain
+        else 1
+    )
+
+    captain_effective = (
+        captain_raw_points *
+        captain_multiplier
+    )
+
+    # --------------------------------------------------------
+    # VICE
+    # --------------------------------------------------------
+
+    vice_name = player_name(
+        vice
+    )
+
+    vice_points = player_points(
+        vice
+    )
+
+    # --------------------------------------------------------
+    # BENCH
+    # --------------------------------------------------------
+
+    bench_points_calculated = sum(
+        player_points(player)
+        for player in bench
+    )
+
+    # FPL's own bench figure is preferred.
+    official_bench_points = entry_history.get(
+        "points_on_bench",
+        bench_points_calculated
+    )
+
+    if official_bench_points is None:
+        official_bench_points = bench_points_calculated
+
+    # --------------------------------------------------------
+    # BIGGEST BENCH REGRET
+    # --------------------------------------------------------
+
+    bench_details = []
+
+    for player in bench:
+
+        pts = player_points(
+            player
+        )
+
+        bench_details.append(
+            (
+                pts,
+                player_name(player)
+            )
+        )
+
+    bench_details.sort(
+        reverse=True
+    )
+
+    if bench_details:
+
+        biggest_bench_points = (
+            bench_details[0][0]
+        )
+
+        biggest_bench_name = (
+            bench_details[0][1]
+        )
+
+    else:
+
+        biggest_bench_points = 0
+        biggest_bench_name = "None"
+
+    # --------------------------------------------------------
+    # STARTING XI PLAYER POINTS
+    # --------------------------------------------------------
+
+    starting_points = sum(
+        player_points(player) *
+        player.get("multiplier", 1)
+        for player in starting
+    )
+
+    # --------------------------------------------------------
+    # STARTING NAMES
+    # --------------------------------------------------------
+
+    starting_names = [
+        player_name(player)
+        for player in starting
+    ]
+
+    # --------------------------------------------------------
+    # CHIP
+    # --------------------------------------------------------
+
+    active_chip = picks_data.get(
+        "active_chip"
+    )
+
+    # --------------------------------------------------------
+    # RANK MOVEMENT
+    #
+    # Positive = moved up
+    # Negative = moved down
+    # --------------------------------------------------------
+
+    rank_change = 0
+
+    if (
+        previous_overall_rank
+        and overall_rank
+    ):
+
+        rank_change = (
+            previous_overall_rank
+            - overall_rank
+        )
+
+    # --------------------------------------------------------
+    # RETURN
     # --------------------------------------------------------
 
     return {
 
-        "id":
-            manager_id,
+        "id": manager_id,
 
-        "name":
-            manager.get(
-                "player_name",
-                "Unknown"
-            ),
+        "name": manager.get(
+            "player_name",
+            "Unknown"
+        ),
 
-        "team_name":
-            manager.get(
-                "entry_name",
-                "Unknown"
-            ),
+        "team_name": manager.get(
+            "entry_name",
+            "Unknown"
+        ),
 
-        "league_position":
-            league_position,
+        "league_position": league_position,
 
-        "gw_points":
-            current_history.get(
-                "points",
-                0
-            ),
+        "gw_points": int(
+            gw_points or 0
+        ),
 
-        "total_points":
-            current_history.get(
-                "total_points",
-                0
-            ),
+        "total_points": int(
+            total_points or 0
+        ),
 
-        "rank":
-            rank,
+        "overall_rank": int(
+            overall_rank or 0
+        ),
 
-        "last_rank":
-            last_rank,
+        "previous_overall_rank": int(
+            previous_overall_rank or 0
+        ),
 
-        "rank_change":
-            last_rank - rank,
+        "rank_change": int(
+            rank_change
+        ),
 
-        "captain":
-            captain_name,
+        "captain": captain_name,
 
-        "captain_points":
-            captain_points,
+        "captain_raw": int(
+            captain_raw_points
+        ),
 
-        "captain_effective":
-            captain_effective,
+        "captain_effective": int(
+            captain_effective
+        ),
 
-        "vice":
-            player_name(vice),
+        "vice": vice_name,
 
-        "bench_points":
-            bench_points,
+        "vice_points": int(
+            vice_points
+        ),
 
-        "biggest_bench":
-            biggest_bench_name,
+        "bench_points": int(
+            official_bench_points
+        ),
 
-        "biggest_bench_points":
-            biggest_bench_points,
+        "bench_points_calculated": int(
+            bench_points_calculated
+        ),
 
-        "transfers":
-            transfers,
+        "biggest_bench": (
+            biggest_bench_name
+        ),
 
-        "transfer_cost":
-            transfer_cost,
+        "biggest_bench_points": int(
+            biggest_bench_points
+        ),
 
-        "starting_points":
-            starting_points,
+        "transfers": int(
+            transfer_count or 0
+        ),
 
-        "starting_names":
+        "transfer_cost": int(
+            transfer_cost or 0
+        ),
+
+        "starting_points": int(
+            starting_points
+        ),
+
+        "starting_names": (
             starting_names
+        ),
+
+        "active_chip": (
+            active_chip or "None"
+        )
     }
 
 
 # ============================================================
-# ANALYSE ENTIRE LEAGUE
+# ANALYSE WHOLE LEAGUE
 # ============================================================
 
 def analyse_league(
     league,
     gw,
-    players
+    players,
+    live_points
 ):
 
     managers = get_all_league_managers(
@@ -718,19 +862,17 @@ def analyse_league(
         0
     )
 
-    total = len(
-        managers
-    )
+    total = len(managers)
 
     for i, manager in enumerate(
         managers
     ):
 
         result = analyse_manager(
-
             manager,
             gw,
-            players
+            players,
+            live_points
         )
 
         if result:
@@ -740,16 +882,15 @@ def analyse_league(
             )
 
         progress.progress(
-
             int(
-
-                ((i + 1)
-                /
-                max(total, 1))
-                *
+                ((i + 1) /
+                max(total, 1)) *
                 100
             )
         )
+
+        # Be gentle on the API
+        time.sleep(0.08)
 
     progress.empty()
 
@@ -765,36 +906,79 @@ def get_awards(df):
     awards = {}
 
     if df.empty:
-
         return awards
+
+    # --------------------------------------------------------
+    # MANAGER OF WEEK
+    # --------------------------------------------------------
 
     awards["manager"] = df.loc[
         df["gw_points"].idxmax()
     ]
 
+    # --------------------------------------------------------
+    # DISASTER
+    # --------------------------------------------------------
+
     awards["disaster"] = df.loc[
         df["gw_points"].idxmin()
     ]
+
+    # --------------------------------------------------------
+    # CAPTAIN KING
+    # --------------------------------------------------------
 
     awards["captain"] = df.loc[
         df["captain_effective"].idxmax()
     ]
 
+    # --------------------------------------------------------
+    # CAPTAIN DISASTER
+    # --------------------------------------------------------
+
     awards["captain_bad"] = df.loc[
         df["captain_effective"].idxmin()
     ]
 
-    awards["bench"] = df.loc[
-        df["bench_points"].idxmax()
+    # --------------------------------------------------------
+    # BENCH BLUNDER
+    # --------------------------------------------------------
+
+    # Only count actual bench mistakes.
+    # Bench Boost = not a blunder.
+    non_bb = df[
+        df["active_chip"] != "bboost"
     ]
+
+    if not non_bb.empty:
+
+        awards["bench"] = non_bb.loc[
+            non_bb["bench_points"].idxmax()
+        ]
+
+    else:
+
+        awards["bench"] = df.iloc[0]
+
+    # --------------------------------------------------------
+    # BIGGEST OVERALL FPL RISER
+    # --------------------------------------------------------
 
     awards["riser"] = df.loc[
         df["rank_change"].idxmax()
     ]
 
+    # --------------------------------------------------------
+    # BIGGEST OVERALL FPL FALLER
+    # --------------------------------------------------------
+
     awards["faller"] = df.loc[
         df["rank_change"].idxmin()
     ]
+
+    # --------------------------------------------------------
+    # MOST TRANSFERS
+    # --------------------------------------------------------
 
     awards["transfer"] = df.loc[
         df["transfers"].idxmax()
@@ -821,29 +1005,26 @@ def generate_local_banter(
     if award == "manager":
 
         return (
-
             f"{name} takes Manager of the Week "
-            f"with {points} points. Somebody check "
-            f"whether they've suddenly started reading "
-            f"the rules."
+            f"with {points} points. "
+            f"Somebody check whether they've "
+            f"suddenly started reading the rules."
         )
 
     if award == "disaster":
 
         return (
-
-            f"{name} finishes bottom of the weekly "
-            f"pile with just {points} points. A performance "
-            f"that will be quietly described as "
-            f"'unlucky' in the group chat."
+            f"{name} finishes bottom of the "
+            f"weekly pile with just {points} points. "
+            f"A performance that will be quietly "
+            f"described as 'unlucky' in the group chat."
         )
 
     if award == "captain":
 
         return (
-
-            f"{name} got the captaincy spot on with "
-            f"{row['captain']} delivering "
+            f"{name} got the captaincy spot on. "
+            f"{row['captain']} delivered "
             f"{row['captain_effective']} effective "
             f"captain points. Tactical genius."
         )
@@ -851,37 +1032,56 @@ def generate_local_banter(
     if award == "captain_bad":
 
         return (
-
-            f"{name} trusted {row['captain']} as captain "
-            f"and was rewarded with "
-            f"{row['captain_effective']} effective points. "
-            f"Bold. Very bold."
+            f"{name} trusted {row['captain']} "
+            f"as captain and got just "
+            f"{row['captain_effective']} effective "
+            f"points. Bold. Very bold."
         )
 
     if award == "bench":
 
         return (
-
-            f"{name} left {row['bench_points']} points "
+            f"{name} left "
+            f"{row['bench_points']} points "
             f"on the bench. That's not squad depth. "
             f"That's self-sabotage."
         )
 
     if award == "riser":
 
-        return (
+        movement = abs(
+            int(row["rank_change"])
+        )
 
+        if movement == 0:
+
+            return (
+                f"{name} didn't move overall "
+                f"this week."
+            )
+
+        return (
             f"{name} climbs "
-            f"{abs(int(row['rank_change']))} places. "
-            f"Suddenly the title looks very interesting."
+            f"{movement} places overall. "
+            f"The comeback is underway."
         )
 
     if award == "faller":
 
-        return (
+        movement = abs(
+            int(row["rank_change"])
+        )
 
+        if movement == 0:
+
+            return (
+                f"{name} survived the week "
+                f"without an overall rank drop."
+            )
+
+        return (
             f"{name} drops "
-            f"{abs(int(row['rank_change']))} places. "
+            f"{movement} places overall. "
             f"The less said, the better."
         )
 
@@ -889,25 +1089,23 @@ def generate_local_banter(
 
 
 # ============================================================
-# GEMINI API KEY
+# GEMINI KEY
 # ============================================================
 
 def get_gemini_key():
 
-    # Streamlit Cloud Secrets
     try:
 
-        if "GEMINI_API_KEY" in st.secrets:
+        key = st.secrets.get(
+            "GEMINI_API_KEY"
+        )
 
-            return st.secrets[
-                "GEMINI_API_KEY"
-            ]
+        if key:
+            return key
 
     except Exception:
-
         pass
 
-    # Local environment
     return os.environ.get(
         "GEMINI_API_KEY"
     )
@@ -921,210 +1119,221 @@ def generate_ai_review(
     league_name,
     gw,
     df,
-    awards
+    awards,
+    status
 ):
 
     api_key = get_gemini_key()
 
     if not api_key:
 
-        return None, (
-            "GEMINI_API_KEY has not been configured."
+        return (
+            "Gemini API key not found."
         )
 
     if not GEMINI_AVAILABLE:
 
-        return None, (
-            "The google-genai package is not installed."
+        return (
+            "The Google Gemini package is not installed."
         )
 
     # --------------------------------------------------------
-    # Create Gemini client
+    # SEND CLEAN DATA TO AI
     # --------------------------------------------------------
 
-    try:
+    records = []
 
-        client = genai.Client(
-            api_key=api_key
-        )
+    for _, row in df.iterrows():
 
-    except Exception as e:
+        records.append({
 
-        return None, (
-            f"Could not connect to Gemini: {e}"
-        )
+            "manager": row["name"],
+
+            "team": row["team_name"],
+
+            "league_position": int(
+                row["league_position"]
+            ),
+
+            "gameweek_points": int(
+                row["gw_points"]
+            ),
+
+            "total_points": int(
+                row["total_points"]
+            ),
+
+            "captain": row["captain"],
+
+            "captain_points": int(
+                row["captain_raw"]
+            ),
+
+            "captain_effective": int(
+                row["captain_effective"]
+            ),
+
+            "bench_points": int(
+                row["bench_points"]
+            ),
+
+            "transfers": int(
+                row["transfers"]
+            ),
+
+            "transfer_cost": int(
+                row["transfer_cost"]
+            ),
+
+            "overall_rank_change": int(
+                row["rank_change"]
+            ),
+
+            "chip": row["active_chip"]
+        })
 
     # --------------------------------------------------------
-    # Convert data
+    # AWARD DATA
     # --------------------------------------------------------
-
-    records = df.to_dict(
-        orient="records"
-    )
 
     award_data = {}
 
-    for key, value in awards.items():
+    for key, row in awards.items():
 
         award_data[key] = {
 
-            "name":
-                value["name"],
+            "manager": row["name"],
 
-            "gw_points":
-                int(
-                    value["gw_points"]
-                ),
+            "gameweek_points": int(
+                row["gw_points"]
+            ),
 
-            "captain":
-                value["captain"],
+            "captain": row["captain"],
 
-            "captain_effective":
-                int(
-                    value[
-                        "captain_effective"
-                    ]
-                ),
+            "captain_effective": int(
+                row["captain_effective"]
+            ),
 
-            "bench_points":
-                int(
-                    value[
-                        "bench_points"
-                    ]
-                ),
+            "bench_points": int(
+                row["bench_points"]
+            ),
 
-            "rank_change":
-                int(
-                    value[
-                        "rank_change"
-                    ]
-                ),
-
-            "transfers":
-                int(
-                    value[
-                        "transfers"
-                    ]
-                ),
-
-            "transfer_cost":
-                int(
-                    value[
-                        "transfer_cost"
-                    ]
-                )
+            "rank_change": int(
+                row["rank_change"]
+            )
         }
 
     # --------------------------------------------------------
-    # Prompt
+    # PROMPT
     # --------------------------------------------------------
 
     prompt = f"""
-You are the editor of a funny British fantasy football
-newspaper covering an FPL mini-league.
+You are the editor of a funny British fantasy
+football newspaper covering an FPL mini-league.
 
-Write a Gameweek {gw} newspaper for:
+NEWSPAPER:
+THE MINI-LEAGUE TIMES
 
+LEAGUE:
 {league_name}
 
-The tone should be:
+GAMEWEEK:
+{gw}
 
-- funny
-- competitive
+GAMEWEEK STATUS:
+{status}
+
+Write a funny, competitive weekly newspaper.
+
+STYLE:
+
+- British football banter
+- witty
 - cheeky
-- football-aware
-- British banter
+- entertaining
 - occasionally savage
-- never genuinely cruel
+- praise good decisions
+- mock bad FPL decisions
+- never genuinely abusive
 - never discriminatory
-- never abusive
+- never invent facts
 
-IMPORTANT:
+VERY IMPORTANT:
 
-Use ONLY the information supplied below.
+Use ONLY the supplied data.
 
 Do NOT invent:
-
-- scores
-- players
+- player scores
 - transfers
-- captain choices
+- captain points
 - league positions
-- events
 - injuries
 - fixtures
-- results
+- goals
+- assists
+- events
 
-If information is not provided, do not pretend you know it.
+If the data does not tell you something,
+do not pretend it happened.
 
-The newspaper should contain:
+The article should contain:
 
-1. BIG NEWSPAPER HEADLINE
+# THE BIG HEADLINE
 
-2. MANAGER OF THE WEEK
+A funny newspaper-style headline.
 
-Explain who won the Gameweek and why.
+## MANAGER OF THE WEEK
 
-3. DISASTERCLASS OF THE WEEK
+Praise the best Gameweek performer.
 
-Give the bottom performer some cheeky FPL banter.
+## DISASTERCLASS OF THE WEEK
 
-4. CAPTAINCY STORY
+Mock the lowest scorer.
+
+## CAPTAINCY CORNER
 
 Discuss the best and worst captain decisions.
 
-5. BENCH BLUNDER
+## BENCH BLUNDER
 
-Identify the biggest points left on the bench.
+Identify the manager who left the most points
+on the bench.
 
-6. BIGGEST RISER
+## THE TITLE RACE
 
-Discuss the biggest overall-rank improvement.
+Discuss the current mini-league leaders.
 
-7. BIGGEST FALLER
+## THE WOODEN SPOON
 
-Discuss the biggest fall.
+Discuss the managers at the bottom.
 
-8. TRANSFER STORY
+## FRAUD WATCH
 
-Discuss the manager who made the most transfers.
-Mention transfer hits if relevant.
+Pick one or two managers whose decisions
+deserve some friendly suspicion.
 
-9. TITLE RACE
+## TRANSFER DESK
 
-Discuss the current top of the mini-league.
+Discuss notable transfer activity.
 
-10. WOODEN SPOON WATCH
+## RISERS AND FALLERS
 
-Discuss the bottom of the league.
+Discuss significant overall rank movements
+where useful.
 
-11. FRAUD WATCH
+## FINAL WHISTLE
 
-Pick out a questionable FPL decision if the data supports it.
+End with a funny closing paragraph.
 
-12. MANAGER SPOTLIGHTS
+The article should be approximately
+700-1000 words.
 
-Mention several managers, not just the winner.
+Remember:
 
-13. CLOSING COLUMN
+The joke should be about FPL decisions,
+not people's personal characteristics.
 
-Finish with a funny prediction or warning for the next Gameweek.
-
-The newspaper should feel like a proper British football
-newspaper covering a group of mates.
-
-Use headings.
-
-Use manager names naturally.
-
-Praise managers who genuinely performed well.
-
-If someone did badly, make fun of their FPL decisions,
-not their personal characteristics.
-
-Aim for approximately 900-1200 words.
-
-LEAGUE DATA:
+DATA:
 
 {json.dumps(records, indent=2)}
 
@@ -1134,255 +1343,79 @@ AWARDS:
 """
 
     # --------------------------------------------------------
-    # Call Gemini
+    # CALL GEMINI
     # --------------------------------------------------------
 
     try:
 
+        client = genai.Client(
+            api_key=api_key
+        )
+
+        # Flash-Lite is fast and cost-efficient.
         response = client.models.generate_content(
-
-            model="gemini-3.7-flash",
-
+            model="gemini-2.5-flash-lite",
             contents=prompt
         )
 
-        article = getattr(
-            response,
-            "text",
-            None
+        if response and response.text:
+
+            return response.text
+
+        return (
+            "Gemini returned no newspaper text."
         )
-
-        if not article:
-
-            return None, (
-                "Gemini returned an empty response."
-            )
-
-        return article, None
 
     except Exception as e:
 
-        return None, (
-            f"Gemini error: {e}"
+        error_text = str(e)
+
+        return (
+            "Gemini could not write the newspaper.\n\n"
+            f"Error: {error_text}\n\n"
+            "If this says 429 or 503, try the button "
+            "again in a few seconds."
         )
 
 
 # ============================================================
-# CREATE PDF
+# NEWSPAPER DOWNLOAD
 # ============================================================
 
-def create_newspaper_pdf(
-    article,
+def create_download_text(
     league_name,
-    gw
+    gw,
+    article
 ):
 
-    if not REPORTLAB_AVAILABLE:
-
-        return None
-
-    buffer = io.BytesIO()
-
-    doc = SimpleDocTemplate(
-
-        buffer,
-
-        pagesize=A4,
-
-        rightMargin=18 * mm,
-
-        leftMargin=18 * mm,
-
-        topMargin=18 * mm,
-
-        bottomMargin=18 * mm
+    timestamp = datetime.now().strftime(
+        "%d/%m/%Y %H:%M"
     )
 
-    styles = getSampleStyleSheet()
+    text = f"""
+============================================================
+THE MINI-LEAGUE TIMES
+============================================================
 
-    title_style = ParagraphStyle(
+{league_name}
 
-        "NewspaperTitle",
+GAMEWEEK {gw}
 
-        parent=styles["Title"],
+Generated: {timestamp}
 
-        alignment=TA_CENTER,
+------------------------------------------------------------
 
-        fontSize=24,
+{article}
 
-        leading=28,
+------------------------------------------------------------
 
-        spaceAfter=8
-    )
+THE MINI-LEAGUE TIMES
+Where your mates' FPL mistakes become public knowledge.
 
-    subtitle_style = ParagraphStyle(
+============================================================
+"""
 
-        "Subtitle",
-
-        parent=styles["Normal"],
-
-        alignment=TA_CENTER,
-
-        fontSize=11,
-
-        leading=15,
-
-        spaceAfter=18
-    )
-
-    heading_style = ParagraphStyle(
-
-        "Heading",
-
-        parent=styles["Heading2"],
-
-        fontSize=16,
-
-        leading=20,
-
-        spaceBefore=12,
-
-        spaceAfter=7
-    )
-
-    body_style = ParagraphStyle(
-
-        "Body",
-
-        parent=styles["BodyText"],
-
-        fontSize=10.5,
-
-        leading=15,
-
-        spaceAfter=8
-    )
-
-    story = []
-
-    story.append(
-        Paragraph(
-            "THE MINI-LEAGUE TIMES",
-            title_style
-        )
-    )
-
-    story.append(
-        Paragraph(
-            f"Gameweek {gw} — {league_name}",
-            subtitle_style
-        )
-    )
-
-    story.append(
-        Spacer(
-            1,
-            5
-        )
-    )
-
-    # --------------------------------------------------------
-    # Clean article
-    # --------------------------------------------------------
-
-    lines = article.splitlines()
-
-    for line in lines:
-
-        line = line.strip()
-
-        if not line:
-
-            story.append(
-                Spacer(
-                    1,
-                    4
-                )
-            )
-
-            continue
-
-        # Markdown headings
-        if line.startswith(
-            "### "
-        ):
-
-            text = line[4:]
-
-            story.append(
-                Paragraph(
-                    text,
-                    heading_style
-                )
-            )
-
-        elif line.startswith(
-            "## "
-        ):
-
-            text = line[3:]
-
-            story.append(
-                Paragraph(
-                    text,
-                    heading_style
-                )
-            )
-
-        elif line.startswith(
-            "# "
-        ):
-
-            text = line[2:]
-
-            story.append(
-                Paragraph(
-                    text,
-                    heading_style
-                )
-            )
-
-        else:
-
-            # Basic markdown cleanup
-            text = line
-
-            text = re.sub(
-                r"\*\*(.*?)\*\*",
-                r"<b>\1</b>",
-                text
-            )
-
-            text = text.replace(
-                "&",
-                "&amp;"
-            )
-
-            # Restore HTML bold entities
-            text = text.replace(
-                "&lt;b&gt;",
-                "<b>"
-            )
-
-            text = text.replace(
-                "&lt;/b&gt;",
-                "</b>"
-            )
-
-            story.append(
-                Paragraph(
-                    text,
-                    body_style
-                )
-            )
-
-    doc.build(
-        story
-    )
-
-    buffer.seek(0)
-
-    return buffer.getvalue()
+    return text
 
 
 # ============================================================
@@ -1409,42 +1442,27 @@ st.markdown(
 # ============================================================
 
 st.sidebar.header(
-    "⚙️ League Setup"
+    "⚙️ Mini-League"
 )
 
-league_id = st.sidebar.text_input(
-
-    "Classic Mini-League ID",
-
-    placeholder="e.g. 123456"
-)
-
-gw_override = st.sidebar.number_input(
-
-    "Gameweek",
-
-    min_value=1,
-
-    max_value=38,
-
-    value=1
+st.sidebar.success(
+    f"League ID: {LEAGUE_ID}"
 )
 
 st.sidebar.caption(
-    "Find the ID in the FPL mini-league URL."
+    "This league is permanently built into the app."
 )
 
-
-# ============================================================
-# LOAD FPL BASE DATA
-# ============================================================
+# ------------------------------------------------------------
+# LOAD BASE DATA
+# ------------------------------------------------------------
 
 bootstrap = get_bootstrap()
 
 if not bootstrap:
 
     st.error(
-        "Could not connect to the FPL API."
+        "❌ Could not connect to the FPL API."
     )
 
     st.stop()
@@ -1458,154 +1476,192 @@ current_gw = get_current_gameweek(
     bootstrap
 )
 
-
-# ============================================================
-# GAMEWEEK SELECTION
-# ============================================================
-
-st.info(
-    f"FPL currently reports Gameweek "
-    f"**{current_gw}**."
+status_current = get_gameweek_status(
+    bootstrap,
+    current_gw
 )
 
-use_gw = st.sidebar.checkbox(
+# ------------------------------------------------------------
+# GAMEWEEK SELECTION
+# ------------------------------------------------------------
 
-    "Use current Gameweek automatically",
+st.sidebar.subheader(
+    "Gameweek"
+)
 
+use_current = st.sidebar.checkbox(
+    "Use current Gameweek",
     value=True
 )
 
-gw = (
-
-    current_gw
-
-    if use_gw
-
-    else gw_override
+manual_gw = st.sidebar.number_input(
+    "Choose Gameweek",
+    min_value=1,
+    max_value=38,
+    value=current_gw
 )
+
+gw = (
+    current_gw
+    if use_current
+    else manual_gw
+)
+
+status = get_gameweek_status(
+    bootstrap,
+    gw
+)
+
+# ------------------------------------------------------------
+# STATUS
+# ------------------------------------------------------------
+
+if status == "Finished":
+
+    st.sidebar.success(
+        f"GW {gw}: Finished"
+    )
+
+elif status == "LIVE":
+
+    st.sidebar.warning(
+        f"GW {gw}: LIVE"
+    )
+
+elif status == "Data checked":
+
+    st.sidebar.success(
+        f"GW {gw}: Data checked"
+    )
+
+else:
+
+    st.sidebar.info(
+        f"GW {gw}: {status}"
+    )
 
 
 # ============================================================
 # LOAD LEAGUE
 # ============================================================
 
-if league_id:
+league = get_league()
 
-    league_id_clean = (
+if not league:
 
-        league_id
-        .strip()
-        .replace(
-            "/",
-            ""
-        )
+    st.error(
+        "❌ Could not load mini-league 637276."
     )
 
-    with st.spinner(
-        "Loading mini-league..."
-    ):
+    st.stop()
 
-        league = get_league(
-            league_id_clean
-        )
 
-    if not league:
+league_name = league.get(
+    "league",
+    {}
+).get(
+    "name",
+    "FPL Mini-League"
+)
 
-        st.error(
-            "I couldn't find that mini-league. "
-            "Check the league ID."
-        )
-
-        st.stop()
-
-    league_name = (
-
-        league.get(
-            "league",
-            {}
-        ).get(
-            "name",
-            "FPL Mini-League"
-        )
-    )
-
-    st.success(
-        f"Loaded **{league_name}**"
-    )
-
-    standings = get_all_league_managers(
-        league
-    )
-
-    if not standings:
-
-        st.warning(
-            "No managers were found."
-        )
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # Analyse button
-    # --------------------------------------------------------
-
-    if st.button(
-
-        f"🚀 Analyse Gameweek {gw}",
-
-        type="primary",
-
-        use_container_width=True
-    ):
-
-        with st.spinner(
-            "Analysing every manager..."
-        ):
-
-            analysed = analyse_league(
-
-                league,
-
-                gw,
-
-                players
-            )
-
-        if not analysed:
-
-            st.error(
-
-                "No manager data could be loaded "
-                "for this Gameweek."
-            )
-
-            st.stop()
-
-        df = pd.DataFrame(
-            analysed
-        )
-
-        st.session_state[
-            "league_df"
-        ] = df
-
-        st.session_state[
-            "league_name"
-        ] = league_name
-
-        st.session_state[
-            "gw"
-        ] = gw
-
-        # Clear previous newspaper
-        st.session_state.pop(
-            "article",
-            None
-        )
+st.success(
+    f"Loaded **{league_name}**"
+)
 
 
 # ============================================================
-# DISPLAY ANALYSIS
+# MANAGER COUNT
+# ============================================================
+
+managers = get_all_league_managers(
+    league
+)
+
+st.sidebar.info(
+    f"👥 Managers found: {len(managers)}"
+)
+
+
+if not managers:
+
+    st.error(
+        "No managers were found in this league."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# ANALYSE BUTTON
+# ============================================================
+
+if st.button(
+    f"🚀 Analyse Gameweek {gw}",
+    type="primary",
+    use_container_width=True
+):
+
+    with st.spinner(
+        f"Getting FPL data for Gameweek {gw}..."
+    ):
+
+        live_data = get_live_gameweek(
+            gw
+        )
+
+        live_points = build_live_points(
+            live_data
+        )
+
+        analysed = analyse_league(
+            league,
+            gw,
+            players,
+            live_points
+        )
+
+    if not analysed:
+
+        st.error(
+            "❌ No manager data could be loaded."
+        )
+
+        st.stop()
+
+    df = pd.DataFrame(
+        analysed
+    )
+
+    st.session_state[
+        "league_df"
+    ] = df
+
+    st.session_state[
+        "league_name"
+    ] = league_name
+
+    st.session_state[
+        "gw"
+    ] = gw
+
+    st.session_state[
+        "status"
+    ] = status
+
+    # Clear old article when new GW analysed
+    if "article" in st.session_state:
+
+        del st.session_state[
+            "article"
+        ]
+
+    st.success(
+        f"Analysis complete — {len(df)} managers analysed."
+    )
+
+
+# ============================================================
+# DISPLAY
 # ============================================================
 
 if "league_df" in st.session_state:
@@ -1622,6 +1678,10 @@ if "league_df" in st.session_state:
         "gw"
     ]
 
+    status = st.session_state[
+        "status"
+    ]
+
     awards = get_awards(
         df
     )
@@ -1633,19 +1693,28 @@ if "league_df" in st.session_state:
     st.markdown("---")
 
     st.markdown(
-
         f"""
         <div style="text-align:center">
-
         <h1>GAMEWEEK {gw}</h1>
-
         <h2>{league_name}</h2>
-
+        <p>{status}</p>
         </div>
         """,
-
         unsafe_allow_html=True
     )
+
+    # ========================================================
+    # DATA WARNING
+    # ========================================================
+
+    if status == "LIVE":
+
+        st.warning(
+            "⚠️ This Gameweek is still LIVE. "
+            "Points, bonus and automatic substitutions "
+            "may still change. Run the analysis again "
+            "after the Gameweek finishes for the final version."
+        )
 
     # ========================================================
     # HEADLINE
@@ -1656,34 +1725,23 @@ if "league_df" in st.session_state:
     ]
 
     st.markdown(
-
         f"""
         <div class="story">
-
         <div class="headline">
-
         🗞️ {winner['name']} TAKES GAMEWEEK HONOURS
-
         </div>
-
         <p>
-
-        {int(winner['gw_points'])} points puts
-
-        <b>{winner['name']}</b>
-
-        at the top of the weekly leaderboard.
-
+        <b>{int(winner['gw_points'])}</b> points puts
+        <b>{winner['name']}</b> at the top of the
+        weekly leaderboard.
         </p>
-
         </div>
         """,
-
         unsafe_allow_html=True
     )
 
     # ========================================================
-    # WEEKLY AWARDS
+    # AWARDS
     # ========================================================
 
     st.subheader(
@@ -1693,23 +1751,17 @@ if "league_df" in st.session_state:
     c1, c2, c3 = st.columns(3)
 
     # --------------------------------------------------------
-    # Manager
+    # MANAGER
     # --------------------------------------------------------
 
     with c1:
 
-        r = awards[
-            "manager"
-        ]
+        r = awards["manager"]
 
         st.markdown(
-
             f"""
             <div class="award">
-
-            <h3>
-            🏆 Manager of the Week
-            </h3>
+            <h3>🏆 Manager of the Week</h3>
 
             <div class="big-number">
             {int(r['gw_points'])}
@@ -1726,28 +1778,21 @@ if "league_df" in st.session_state:
 
             </div>
             """,
-
             unsafe_allow_html=True
         )
 
     # --------------------------------------------------------
-    # Disaster
+    # DISASTER
     # --------------------------------------------------------
 
     with c2:
 
-        r = awards[
-            "disaster"
-        ]
+        r = awards["disaster"]
 
         st.markdown(
-
             f"""
             <div class="award">
-
-            <h3>
-            💀 Disasterclass
-            </h3>
+            <h3>💀 Disasterclass</h3>
 
             <div class="big-number">
             {int(r['gw_points'])}
@@ -1764,28 +1809,21 @@ if "league_df" in st.session_state:
 
             </div>
             """,
-
             unsafe_allow_html=True
         )
 
     # --------------------------------------------------------
-    # Captain
+    # CAPTAIN
     # --------------------------------------------------------
 
     with c3:
 
-        r = awards[
-            "captain"
-        ]
+        r = awards["captain"]
 
         st.markdown(
-
             f"""
             <div class="award">
-
-            <h3>
-            🎯 Captaincy King
-            </h3>
+            <h3>🎯 Captaincy King</h3>
 
             <div class="big-number">
             {int(r['captain_effective'])}
@@ -1799,7 +1837,6 @@ if "league_df" in st.session_state:
 
             </div>
             """,
-
             unsafe_allow_html=True
         )
 
@@ -1808,7 +1845,7 @@ if "league_df" in st.session_state:
     c1, c2, c3 = st.columns(3)
 
     # --------------------------------------------------------
-    # Captain Disaster
+    # CAPTAIN DISASTER
     # --------------------------------------------------------
 
     with c1:
@@ -1818,32 +1855,25 @@ if "league_df" in st.session_state:
         ]
 
         st.markdown(
-
             f"""
             <div class="award">
-
-            <h3>
-            🤡 Captaincy Disaster
-            </h3>
+            <h3>🤡 Captaincy Disaster</h3>
 
             <b>{r['name']}</b>
 
             <p>
-
             Captained {r['captain']}
             for {int(r['captain_effective'])}
-            points.
-
+            effective points.
             </p>
 
             </div>
             """,
-
             unsafe_allow_html=True
         )
 
     # --------------------------------------------------------
-    # Bench
+    # BENCH
     # --------------------------------------------------------
 
     with c2:
@@ -1853,13 +1883,9 @@ if "league_df" in st.session_state:
         ]
 
         st.markdown(
-
             f"""
             <div class="award">
-
-            <h3>
-            🪑 Bench Blunder
-            </h3>
+            <h3>🪑 Bench Blunder</h3>
 
             <div class="big-number">
             {int(r['bench_points'])}
@@ -1871,14 +1897,19 @@ if "league_df" in st.session_state:
             Points left sitting on the bench.
             </p>
 
+            <p>
+            Biggest regret:
+            <b>{r['biggest_bench']}</b>
+            ({int(r['biggest_bench_points'])})
+            </p>
+
             </div>
             """,
-
             unsafe_allow_html=True
         )
 
     # --------------------------------------------------------
-    # Riser
+    # RISER
     # --------------------------------------------------------
 
     with c3:
@@ -1887,28 +1918,27 @@ if "league_df" in st.session_state:
             "riser"
         ]
 
-        st.markdown(
+        movement = int(
+            r["rank_change"]
+        )
 
+        st.markdown(
             f"""
             <div class="award">
-
-            <h3>
-            📈 Biggest Riser
-            </h3>
+            <h3>📈 Biggest Riser</h3>
 
             <div class="big-number">
-            +{int(r['rank_change'])}
+            {movement:+d}
             </div>
 
             <b>{r['name']}</b>
 
             <p>
-            The comeback is underway.
+            Overall FPL rank movement.
             </p>
 
             </div>
             """,
-
             unsafe_allow_html=True
         )
 
@@ -1922,91 +1952,52 @@ if "league_df" in st.session_state:
         "🎙️ The Weekly Review"
     )
 
-    api_key_exists = bool(
-        get_gemini_key()
-    )
-
-    if not api_key_exists:
-
-        st.warning(
-            "Gemini is not connected yet. "
-            "Add GEMINI_API_KEY to Streamlit Secrets."
-        )
-
-    elif not GEMINI_AVAILABLE:
-
-        st.error(
-            "Gemini package is missing. "
-            "Add google-genai to requirements.txt."
-        )
-
-    else:
+    if get_gemini_key():
 
         st.success(
             "🤖 Gemini AI is connected."
         )
 
-        if st.button(
+    else:
 
-            "📰 WRITE THE FULL NEWSPAPER",
+        st.warning(
+            "Gemini AI is not connected. "
+            "Add GEMINI_API_KEY to Streamlit Secrets."
+        )
 
-            type="primary",
+    if st.button(
+        "📰 WRITE THE FULL NEWSPAPER",
+        type="primary",
+        use_container_width=True
+    ):
 
-            use_container_width=True
+        with st.spinner(
+            "🖋️ The journalists are writing..."
         ):
 
-            with st.spinner(
+            article = generate_ai_review(
+                league_name,
+                gw,
+                df,
+                awards,
+                status
+            )
 
-                "🖊️ The journalists are writing "
-                "the Gameweek newspaper..."
-            ):
+        if article:
 
-                article, error = generate_ai_review(
+            st.session_state[
+                "article"
+            ] = article
 
-                    league_name,
-
-                    gw,
-
-                    df,
-
-                    awards
-                )
-
-            if error:
-
-                st.error(
-                    error
-                )
-
-            elif article:
-
-                st.session_state[
-                    "article"
-                ] = article
-
-                st.success(
-                    "📰 Newspaper written!"
-                )
-
-    # ========================================================
-    # DISPLAY NEWSPAPER
-    # ========================================================
+    # --------------------------------------------------------
+    # ARTICLE
+    # --------------------------------------------------------
 
     if "article" in st.session_state:
 
         article = st.session_state[
             "article"
         ]
-
-        st.markdown("---")
-
-        st.markdown(
-            "## 📰 THE MINI-LEAGUE TIMES"
-        )
-
-        st.caption(
-            f"Gameweek {gw} • {league_name}"
-        )
 
         st.markdown(
             '<div class="story">',
@@ -2022,91 +2013,29 @@ if "league_df" in st.session_state:
             unsafe_allow_html=True
         )
 
-        # ====================================================
-        # DOWNLOAD NEWSPAPER
-        # ====================================================
-
-        st.markdown(
-            '<div class="download-box">',
-            unsafe_allow_html=True
-        )
-
-        st.subheader(
-            "📥 Download & Share"
-        )
-
-        st.write(
-            "Save the newspaper and send it to "
-            "your FPL group chat."
-        )
-
         # ----------------------------------------------------
-        # TXT DOWNLOAD
+        # DOWNLOAD
         # ----------------------------------------------------
 
-        filename_base = (
-
-            f"FPL_Mini_League_Times_"
-            f"GW{gw}"
+        download_text = create_download_text(
+            league_name,
+            gw,
+            article
         )
 
         st.download_button(
-
-            label="📄 Download Newspaper (TXT)",
-
-            data=article,
-
-            file_name=
-                filename_base
-                + ".txt",
-
+            label="📥 Download Newspaper",
+            data=download_text,
+            file_name=(
+                f"Mini-League-Times-GW-{gw}.txt"
+            ),
             mime="text/plain",
-
             use_container_width=True
         )
 
-        # ----------------------------------------------------
-        # PDF DOWNLOAD
-        # ----------------------------------------------------
-
-        if REPORTLAB_AVAILABLE:
-
-            pdf_data = create_newspaper_pdf(
-
-                article,
-
-                league_name,
-
-                gw
-            )
-
-            if pdf_data:
-
-                st.download_button(
-
-                    label="📰 Download Newspaper (PDF)",
-
-                    data=pdf_data,
-
-                    file_name=
-                        filename_base
-                        + ".pdf",
-
-                    mime="application/pdf",
-
-                    use_container_width=True
-                )
-
-        else:
-
-            st.info(
-                "PDF download requires reportlab. "
-                "Add reportlab to requirements.txt."
-            )
-
-        st.markdown(
-            '</div>',
-            unsafe_allow_html=True
+        st.caption(
+            "You can open the downloaded file and "
+            "share it in WhatsApp, Messenger, email, etc."
         )
 
     # ========================================================
@@ -2123,65 +2052,64 @@ if "league_df" in st.session_state:
         "league_position"
     ).copy()
 
-    table["Movement"] = table[
-        "rank_change"
-    ].apply(
-
-        lambda x:
-
-        f"⬆️ {int(x)}"
-
-        if x > 0
-
-        else (
-
-            f"⬇️ {abs(int(x))}"
-
-            if x < 0
-
-            else "—"
-        )
-    )
-
     display = table[
-
         [
-
             "league_position",
-
             "name",
-
             "team_name",
-
             "gw_points",
-
-            "total_points",
-
-            "Movement"
+            "total_points"
         ]
     ].copy()
 
     display.columns = [
-
         "Pos",
-
         "Manager",
-
         "Team",
-
         f"GW {gw}",
-
-        "Total",
-
-        "Movement"
+        "Total"
     ]
 
     st.dataframe(
-
         display,
-
         use_container_width=True,
+        hide_index=True
+    )
 
+    # ========================================================
+    # WEEKLY LEADERBOARD
+    # ========================================================
+
+    st.subheader(
+        "⚡ Gameweek Leaderboard"
+    )
+
+    weekly = df.sort_values(
+        "gw_points",
+        ascending=False
+    ).copy()
+
+    weekly_display = weekly[
+        [
+            "name",
+            "team_name",
+            "gw_points",
+            "captain",
+            "captain_effective"
+        ]
+    ].copy()
+
+    weekly_display.columns = [
+        "Manager",
+        "Team",
+        "GW Points",
+        "Captain",
+        "Captain Points"
+    ]
+
+    st.dataframe(
+        weekly_display,
+        use_container_width=True,
         hide_index=True
     )
 
@@ -2196,9 +2124,7 @@ if "league_df" in st.session_state:
     )
 
     selected = st.selectbox(
-
         "Choose a manager",
-
         df["name"].tolist()
     )
 
@@ -2209,56 +2135,39 @@ if "league_df" in st.session_state:
     c1, c2, c3, c4 = st.columns(4)
 
     c1.metric(
-
         "GW Points",
-
-        int(
-            manager["gw_points"]
-        )
+        int(manager["gw_points"])
     )
 
     c2.metric(
-
         "Total",
-
-        int(
-            manager["total_points"]
-        )
+        int(manager["total_points"])
     )
 
     c3.metric(
-
         "Captain",
-
         manager["captain"]
     )
 
     c4.metric(
-
         "Bench",
-
-        int(
-            manager["bench_points"]
-        )
+        int(manager["bench_points"])
     )
 
     st.write(
-
         f"**Captain:** "
         f"{manager['captain']} "
-        f"("
-        f"{int(manager['captain_effective'])}"
-        f" effective points)"
+        f"({int(manager['captain_raw'])} raw / "
+        f"{int(manager['captain_effective'])} effective)"
     )
 
     st.write(
-
         f"**Vice Captain:** "
-        f"{manager['vice']}"
+        f"{manager['vice']} "
+        f"({int(manager['vice_points'])} points)"
     )
 
     st.write(
-
         f"**Transfers:** "
         f"{int(manager['transfers'])} "
         f"| **Hit:** "
@@ -2266,19 +2175,19 @@ if "league_df" in st.session_state:
     )
 
     st.write(
-
         f"**Biggest bench regret:** "
         f"{manager['biggest_bench']} "
-        f"("
-        f"{int(manager['biggest_bench_points'])}"
-        f" points)"
+        f"({int(manager['biggest_bench_points'])} points)"
     )
 
     st.write(
+        f"**Chip:** "
+        f"{manager['active_chip']}"
+    )
 
+    st.write(
         "**Starting XI:** "
-        +
-        ", ".join(
+        + ", ".join(
             manager["starting_names"]
         )
     )
@@ -2301,20 +2210,56 @@ if "league_df" in st.session_state:
         "captain_bad"
     ]
 
-    if worst["id"] == captain_bad["id"]:
+    bench = awards[
+        "bench"
+    ]
+
+    fraud_names = []
+
+    if worst["gw_points"] <= (
+        df["gw_points"].median()
+        - 15
+    ):
+
+        fraud_names.append(
+            worst["name"]
+        )
+
+    if (
+        captain_bad["captain_effective"]
+        <= 4
+    ):
+
+        if captain_bad["name"] not in fraud_names:
+
+            fraud_names.append(
+                captain_bad["name"]
+            )
+
+    if (
+        bench["bench_points"]
+        >= 10
+    ):
+
+        if bench["name"] not in fraud_names:
+
+            fraud_names.append(
+                bench["name"]
+            )
+
+    if fraud_names:
 
         st.warning(
-
-            f"🚨 **{worst['name']}** is officially "
-            f"on Fraud Watch after finishing the week "
-            f"bottom and making a questionable captaincy "
-            f"decision."
+            "🚨 Fraud Watch: "
+            + ", ".join(
+                fraud_names
+            )
+            + " — the committee is investigating."
         )
 
     else:
 
         st.info(
-
             "Nobody has earned a full Fraud Watch "
             "investigation this week. Yet."
         )
@@ -2333,39 +2278,26 @@ if "league_df" in st.session_state:
         "league_position"
     ).head(5)
 
-    for _, r in title.iterrows():
+    for _, row in title.iterrows():
 
         st.write(
-
-            f"**{int(r['league_position'])}. "
-            f"{r['name']}** — "
-            f"{int(r['total_points'])} points"
+            f"**{int(row['league_position'])}. "
+            f"{row['name']}** — "
+            f"{int(row['total_points'])} points"
         )
 
     if len(title) >= 2:
 
         gap = (
-
-            int(
-                title.iloc[0][
-                    "total_points"
-                ]
-            )
-
+            int(title.iloc[0]["total_points"])
             -
-
-            int(
-                title.iloc[1][
-                    "total_points"
-                ]
-            )
+            int(title.iloc[1]["total_points"])
         )
 
         st.info(
-
-            f"🥊 **{title.iloc[0]['name']}** "
-            f"leads **{title.iloc[1]['name']}** "
-            f"by **{gap} points**."
+            f"🥊 **{title.iloc[0]['name']}** leads "
+            f"**{title.iloc[1]['name']}** by "
+            f"**{gap} points**."
         )
 
     # ========================================================
@@ -2377,21 +2309,62 @@ if "league_df" in st.session_state:
     )
 
     bottom = df.sort_values(
-
         "league_position",
-
         ascending=False
-
     ).head(3)
 
-    for _, r in bottom.iterrows():
+    for _, row in bottom.iterrows():
 
         st.write(
-
-            f"**{int(r['league_position'])}. "
-            f"{r['name']}** — "
-            f"{int(r['total_points'])} points"
+            f"**{int(row['league_position'])}. "
+            f"{row['name']}** — "
+            f"{int(row['total_points'])} points"
         )
+
+    # ========================================================
+    # DATA CHECK
+    # ========================================================
+
+    st.markdown("---")
+
+    st.subheader(
+        "🔧 Data Check"
+    )
+
+    st.write(
+        "This section is here so you can spot "
+        "anything strange before trusting the newspaper."
+    )
+
+    check = df[
+        [
+            "name",
+            "gw_points",
+            "captain",
+            "captain_raw",
+            "captain_effective",
+            "bench_points",
+            "transfers",
+            "transfer_cost"
+        ]
+    ].copy()
+
+    check.columns = [
+        "Manager",
+        "GW Points",
+        "Captain",
+        "Captain Raw",
+        "Captain Effective",
+        "Bench Points",
+        "Transfers",
+        "Hit"
+    ]
+
+    st.dataframe(
+        check,
+        use_container_width=True,
+        hide_index=True
+    )
 
 
 # ============================================================
@@ -2401,44 +2374,33 @@ if "league_df" in st.session_state:
 else:
 
     st.markdown(
-
         """
         ### 👋 Welcome to The Mini-League Times
 
-        Enter your **FPL Classic Mini-League ID** in the
-        sidebar and we'll turn your weekly FPL results into
-        a full newspaper.
+        Your FPL league is already built into the app.
+
+        **League ID:** 637276
+
+        Enter nothing — just choose the Gameweek and
+        press **Analyse Gameweek**.
 
         You'll get:
 
-        🏆 Manager of the Week
+        🏆 Manager of the Week  
+        💀 Disasterclass  
+        🎯 Captaincy King  
+        🤡 Captaincy Disaster  
+        🪑 Bench Blunder  
+        📈 Biggest Riser  
+        📉 Biggest Faller  
+        💰 Transfer analysis  
+        🚨 Fraud Watch  
+        🥊 Title Race  
+        🥄 Wooden Spoon Watch  
+        🎙️ AI-written newspaper  
+        📥 Downloadable newspaper
 
-        💀 Disasterclass
-
-        🎯 Captaincy Awards
-
-        🪑 Bench Blunders
-
-        📈 Biggest Risers
-
-        📉 Biggest Fallers
-
-        💰 Transfer analysis
-
-        🚨 Fraud Watch
-
-        🥊 Title Race
-
-        🥄 Wooden Spoon Watch
-
-        🔎 Manager Spotlight
-
-        🤖 Gemini AI-written newspaper
-
-        📄 Downloadable newspaper
-
-        📰 Shareable PDF
-
-        **Enter a league ID to get started.**
+        The AI newspaper uses your actual FPL data and
+        is instructed not to invent scores or events.
         """
     )
