@@ -4,7 +4,8 @@ import pandas as pd
 import json
 import os
 import re
-import html
+import textwrap
+import html as html_lib
 from io import BytesIO
 from datetime import datetime
 
@@ -14,11 +15,12 @@ from datetime import datetime
 
 try:
     from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
     from reportlab.lib.styles import (
         getSampleStyleSheet,
         ParagraphStyle,
     )
-    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.platypus import (
         SimpleDocTemplate,
         Paragraph,
@@ -26,8 +28,8 @@ try:
         Table,
         TableStyle,
         HRFlowable,
+        KeepTogether,
     )
-    from reportlab.lib import colors
     from reportlab.lib.units import mm
 
     REPORTLAB_AVAILABLE = True
@@ -69,349 +71,485 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-
-# ============================================================
-# YOUR THREE LEAGUES
-# ============================================================
-
+# YOUR THREE MINI-LEAGUES
 LEAGUES = {
     "Dad V Lad": "1555183",
     "The Lads": "70818",
     "IMW": "637276",
 }
 
+# Use an environment variable if you want to change the model.
+GEMINI_MODEL = os.environ.get(
+    "GEMINI_MODEL",
+    "gemini-2.5-flash"
+)
+
 
 # ============================================================
-# GEMINI MODEL
-# ============================================================
-
-GEMINI_MODEL = "gemini-3.5-flash-lite"
-
-
-# ============================================================
-# CUSTOM CSS
+# VISUAL STYLE
 # ============================================================
 
 st.markdown(
     """
 <style>
 
-html, body, [class*="css"] {
-    font-family: Georgia, "Times New Roman", serif;
-}
-
-/* MAIN PAGE */
-
-.main {
-    background-color: #f7f4ec;
-}
+/* ----------------------------------------------------------
+   GENERAL
+---------------------------------------------------------- */
 
 .block-container {
-    padding-top: 1rem;
-    padding-bottom: 4rem;
+    padding-top: 1.5rem;
+    padding-bottom: 3rem;
     max-width: 1400px;
 }
 
+body {
+    background: #f4f1e8;
+}
 
-/* NEWSPAPER MASTHEAD */
 
-.masthead {
+/* ----------------------------------------------------------
+   NEWSPAPER MASTHEAD
+---------------------------------------------------------- */
+
+.newspaper {
     background:
-        radial-gradient(circle at top left, rgba(255,255,255,.16), transparent 35%),
-        linear-gradient(135deg, #111111, #252525);
-    color: white;
-    padding: 28px 25px 20px 25px;
+        linear-gradient(
+            135deg,
+            rgba(255,255,255,0.97),
+            rgba(245,241,225,0.98)
+        );
+    border: 4px solid #111827;
     border-radius: 18px;
-    margin-bottom: 15px;
-    border-bottom: 7px solid #d4af37;
-    box-shadow: 0 8px 25px rgba(0,0,0,.18);
+    padding: 28px 30px 22px 30px;
+    margin-bottom: 18px;
+    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
 }
 
 .masthead-title {
-    text-align: center;
-    font-family: Georgia, "Times New Roman", serif;
-    font-size: 58px;
-    font-weight: 900;
-    letter-spacing: -3px;
+    font-family: Georgia, serif;
+    font-size: 54px;
     line-height: 1;
+    font-weight: 900;
+    text-align: center;
+    color: #111827;
+    letter-spacing: -2px;
 }
 
 .masthead-subtitle {
     text-align: center;
+    font-family: Georgia, serif;
     font-size: 17px;
-    margin-top: 10px;
-    opacity: .85;
-    letter-spacing: 1px;
+    color: #555;
+    margin-top: 8px;
+    font-style: italic;
 }
 
 .edition-row {
+    border-top: 2px solid #111827;
+    border-bottom: 2px solid #111827;
+    margin-top: 18px;
+    padding: 8px 0;
     display: flex;
     justify-content: space-between;
-    border-top: 1px solid rgba(255,255,255,.25);
-    margin-top: 20px;
-    padding-top: 10px;
-    font-family: Arial, sans-serif;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-family: monospace;
+    font-size: 13px;
+    font-weight: bold;
 }
 
 
-/* TICKER */
+/* ----------------------------------------------------------
+   BREAKING NEWS
+---------------------------------------------------------- */
 
-.ticker {
-    background: #d4af37;
-    color: #111;
-    padding: 9px 15px;
-    border-radius: 8px;
-    font-family: Arial, sans-serif;
-    font-weight: 800;
-    margin-bottom: 18px;
+.breaking {
+    background: #f4c430;
+    border: 3px solid #111827;
+    border-radius: 12px;
+    padding: 13px 18px;
+    margin: 15px 0;
+    color: #111827;
+    font-weight: 900;
+    font-size: 16px;
+    box-shadow: 0 4px 0 #111827;
 }
 
 
-/* HERO */
+/* ----------------------------------------------------------
+   HERO STORY
+---------------------------------------------------------- */
 
 .hero {
     background:
+        radial-gradient(
+            circle at 85% 20%,
+            rgba(255,255,255,0.18) 0,
+            rgba(255,255,255,0) 30%
+        ),
         linear-gradient(
             135deg,
-            rgba(255,255,255,.96),
-            rgba(235,235,225,.96)
+            #172554,
+            #1d4ed8
         );
-    border: 1px solid #ccc;
+    color: white;
     border-radius: 18px;
     padding: 30px;
-    margin-bottom: 22px;
-    box-shadow: 0 7px 20px rgba(0,0,0,.08);
+    margin: 18px 0;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.2);
+    position: relative;
+    overflow: hidden;
+}
+
+.hero-ball {
+    position: absolute;
+    right: 35px;
+    top: 20px;
+    font-size: 90px;
+    opacity: 0.18;
 }
 
 .hero-kicker {
-    font-family: Arial, sans-serif;
-    font-size: 13px;
-    font-weight: 800;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-}
-
-.hero-headline {
-    font-size: 42px;
-    font-weight: 900;
-    line-height: 1.05;
-    margin: 8px 0;
-}
-
-.hero-score {
-    font-family: Arial, sans-serif;
-    font-size: 20px;
-    font-weight: 800;
-}
-
-
-/* SECTION HEADERS */
-
-.section-title {
-    border-top: 4px solid #111;
-    border-bottom: 2px solid #111;
-    padding: 9px 0;
-    margin: 28px 0 18px 0;
-    font-size: 25px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-}
-
-
-/* CARDS */
-
-.card {
-    background: rgba(255,255,255,.90);
-    border: 1px solid #d2d2d2;
-    border-radius: 15px;
-    padding: 20px;
-    min-height: 190px;
-    box-shadow: 0 4px 12px rgba(0,0,0,.06);
-}
-
-.card-dark {
-    background: #171717;
-    color: white;
-    border-radius: 15px;
-    padding: 22px;
-    min-height: 190px;
-}
-
-.card-title {
-    font-family: Arial, sans-serif;
-    font-size: 13px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-.card-number {
-    font-family: Arial, sans-serif;
-    font-size: 46px;
-    font-weight: 900;
-    line-height: 1;
-    margin: 10px 0;
-}
-
-.card-manager {
-    font-size: 20px;
-    font-weight: 900;
-}
-
-.card-text {
     font-size: 14px;
-    line-height: 1.45;
-}
-
-
-/* PODIUM */
-
-.podium-card {
-    text-align: center;
-    background: white;
-    border: 1px solid #ccc;
-    border-radius: 15px;
-    padding: 18px;
-    box-shadow: 0 5px 15px rgba(0,0,0,.07);
-}
-
-.podium-place {
-    font-family: Arial, sans-serif;
-    font-size: 38px;
-    font-weight: 900;
-}
-
-.podium-name {
-    font-size: 21px;
-    font-weight: 900;
-}
-
-.podium-points {
-    font-family: Arial, sans-serif;
-    font-size: 15px;
-}
-
-
-/* FAN INTERVIEW */
-
-.interview {
-    background:
-        linear-gradient(
-            135deg,
-            #ffffff,
-            #efefef
-        );
-    border-left: 7px solid #111;
-    padding: 24px;
-    border-radius: 5px 15px 15px 5px;
-    box-shadow: 0 5px 15px rgba(0,0,0,.07);
-}
-
-.interviewer {
-    font-family: Arial, sans-serif;
-    font-size: 12px;
     text-transform: uppercase;
+    letter-spacing: 2px;
     font-weight: 900;
-    letter-spacing: 1px;
+    opacity: 0.85;
 }
 
-.question {
-    font-size: 18px;
+.hero-title {
+    font-family: Georgia, serif;
+    font-size: 38px;
+    line-height: 1.05;
     font-weight: 900;
-    margin-top: 12px;
+    margin: 8px 0;
+    max-width: 850px;
 }
 
-.answer {
-    font-size: 17px;
-    line-height: 1.5;
-    margin: 7px 0 15px 0;
-}
-
-.fan-rating {
-    font-family: Arial, sans-serif;
+.hero-points {
     font-size: 24px;
     font-weight: 900;
 }
 
 
-/* QUOTE */
+/* ----------------------------------------------------------
+   SECTION TITLES
+---------------------------------------------------------- */
 
-.quote-box {
-    background: #111;
-    color: white;
-    padding: 25px;
-    border-radius: 15px;
-    font-size: 21px;
-    font-style: italic;
-    line-height: 1.45;
-}
-
-.quote-author {
-    font-family: Arial, sans-serif;
-    font-size: 12px;
-    font-style: normal;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-top: 15px;
-    opacity: .7;
+.section-title {
+    font-family: Georgia, serif;
+    font-size: 30px;
+    font-weight: 900;
+    border-bottom: 4px solid #111827;
+    padding-bottom: 7px;
+    margin-top: 30px;
+    margin-bottom: 18px;
 }
 
 
-/* FORM GUIDE */
+/* ----------------------------------------------------------
+   AWARD CARDS
+---------------------------------------------------------- */
 
-.form-hot {
-    border-left: 6px solid #1b7f3a;
-    background: #eef8f1;
-    padding: 15px;
-    border-radius: 8px;
-}
-
-.form-cold {
-    border-left: 6px solid #a33;
-    background: #fff0f0;
-    padding: 15px;
-    border-radius: 8px;
-}
-
-
-/* TABLE */
-
-.newspaper-table {
+.award-card {
     background: white;
-    border-radius: 12px;
-    padding: 8px;
+    border: 2px solid #d1d5db;
+    border-radius: 16px;
+    padding: 20px;
+    min-height: 220px;
+    margin-bottom: 18px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+}
+
+.award-card.gold {
+    border-top: 8px solid #eab308;
+}
+
+.award-card.red {
+    border-top: 8px solid #ef4444;
+}
+
+.award-card.blue {
+    border-top: 8px solid #2563eb;
+}
+
+.award-card.green {
+    border-top: 8px solid #16a34a;
+}
+
+.award-card.purple {
+    border-top: 8px solid #7c3aed;
+}
+
+.award-card.orange {
+    border-top: 8px solid #f97316;
+}
+
+.award-icon {
+    font-size: 34px;
+}
+
+.award-title {
+    font-family: Georgia, serif;
+    font-size: 20px;
+    font-weight: 900;
+    margin: 6px 0;
+}
+
+.award-number {
+    font-size: 42px;
+    font-weight: 900;
+    line-height: 1;
+    margin: 10px 0;
+}
+
+.award-manager {
+    font-size: 19px;
+    font-weight: 900;
+}
+
+.award-text {
+    color: #555;
+    margin-top: 8px;
 }
 
 
-/* BIG NUMBER */
+/* ----------------------------------------------------------
+   PODIUM
+---------------------------------------------------------- */
 
-.big-stat {
-    font-family: Arial, sans-serif;
-    font-size: 50px;
+.podium-wrap {
+    background: linear-gradient(
+        135deg,
+        #111827,
+        #1f2937
+    );
+    border-radius: 18px;
+    padding: 25px;
+    color: white;
+    margin: 20px 0;
+}
+
+.podium-title {
+    font-family: Georgia, serif;
+    text-align: center;
+    font-size: 28px;
+    font-weight: 900;
+    margin-bottom: 25px;
+}
+
+.podium {
+    display: flex;
+    align-items: end;
+    justify-content: center;
+    gap: 12px;
+}
+
+.podium-box {
+    background: white;
+    color: #111827;
+    border-radius: 14px 14px 5px 5px;
+    padding: 15px;
+    text-align: center;
+    width: 30%;
+}
+
+.podium-first {
+    min-height: 230px;
+    border-top: 10px solid #facc15;
+}
+
+.podium-second {
+    min-height: 185px;
+    border-top: 10px solid #d1d5db;
+}
+
+.podium-third {
+    min-height: 150px;
+    border-top: 10px solid #b45309;
+}
+
+.podium-medal {
+    font-size: 35px;
+}
+
+.podium-name {
+    font-size: 18px;
+    font-weight: 900;
+}
+
+.podium-points {
+    font-size: 27px;
     font-weight: 900;
 }
 
 
-/* FOOTER */
+/* ----------------------------------------------------------
+   FAN INTERVIEW
+---------------------------------------------------------- */
 
-.footer {
-    text-align: center;
-    font-family: Arial, sans-serif;
-    font-size: 11px;
-    color: #777;
-    padding: 25px 0;
-    border-top: 1px solid #ccc;
+.interview {
+    background:
+        linear-gradient(
+            135deg,
+            #fff7ed,
+            #ffffff
+        );
+    border: 3px solid #ea580c;
+    border-radius: 18px;
+    padding: 24px;
+    margin: 20px 0;
+    box-shadow: 0 6px 15px rgba(0,0,0,0.08);
+}
+
+.interview-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: Georgia, serif;
+    font-size: 27px;
+    font-weight: 900;
+    color: #9a3412;
+    border-bottom: 2px solid #fed7aa;
+    padding-bottom: 12px;
+    margin-bottom: 15px;
+}
+
+.interview-person {
+    font-size: 20px;
+    font-weight: 900;
+}
+
+.question {
+    font-weight: 900;
+    margin-top: 14px;
+    color: #9a3412;
+}
+
+.answer {
+    margin-top: 4px;
+    font-family: Georgia, serif;
+    font-size: 16px;
+    line-height: 1.5;
 }
 
 
-/* SIDEBAR */
+/* ----------------------------------------------------------
+   SPECIAL STORIES
+---------------------------------------------------------- */
 
-section[data-testid="stSidebar"] {
-    background: #eeeae0;
+.story-card {
+    background: white;
+    border-radius: 16px;
+    border: 2px solid #d1d5db;
+    padding: 22px;
+    margin-bottom: 18px;
+}
+
+.story-card h3 {
+    font-family: Georgia, serif;
+    margin-top: 0;
+}
+
+.fraud {
+    background: linear-gradient(
+        135deg,
+        #450a0a,
+        #991b1b
+    );
+    color: white;
+    border-radius: 18px;
+    padding: 25px;
+    border: 3px solid #ef4444;
+}
+
+.title-race {
+    background: linear-gradient(
+        135deg,
+        #052e16,
+        #166534
+    );
+    color: white;
+    border-radius: 18px;
+    padding: 25px;
+}
+
+.wooden-spoon {
+    background: linear-gradient(
+        135deg,
+        #3f1d0b,
+        #92400e
+    );
+    color: white;
+    border-radius: 18px;
+    padding: 25px;
+}
+
+
+/* ----------------------------------------------------------
+   AI ARTICLE
+---------------------------------------------------------- */
+
+.article {
+    background: #fffdf5;
+    border: 2px solid #111827;
+    border-radius: 16px;
+    padding: 30px;
+    font-family: Georgia, serif;
+    line-height: 1.7;
+    box-shadow: 0 7px 20px rgba(0,0,0,0.10);
+}
+
+.article h1,
+.article h2,
+.article h3 {
+    font-family: Georgia, serif;
+    color: #111827;
+}
+
+.article h1 {
+    font-size: 36px;
+}
+
+.article h2 {
+    border-bottom: 2px solid #d1d5db;
+    padding-bottom: 5px;
+}
+
+
+/* ----------------------------------------------------------
+   SMALL STAT CARDS
+---------------------------------------------------------- */
+
+.stat-card {
+    background: white;
+    border-radius: 14px;
+    padding: 16px;
+    border: 2px solid #e5e7eb;
+    text-align: center;
+}
+
+.stat-number {
+    font-size: 30px;
+    font-weight: 900;
+}
+
+.stat-label {
+    color: #6b7280;
+    font-size: 13px;
+}
+
+
+/* ----------------------------------------------------------
+   FOOTER
+---------------------------------------------------------- */
+
+.footer {
+    text-align: center;
+    font-family: Georgia, serif;
+    color: #666;
+    padding: 25px;
+    border-top: 3px double #111827;
+    margin-top: 35px;
 }
 
 </style>
@@ -421,7 +559,28 @@ section[data-testid="stSidebar"] {
 
 
 # ============================================================
-# API HELPERS
+# SAFE HTML RENDERER
+# ============================================================
+
+def render_html(content):
+    """
+    IMPORTANT:
+    Removes accidental indentation from HTML.
+
+    This is what fixes the problem where Streamlit was showing:
+    <div class="...">
+    instead of actually rendering the design.
+    """
+    cleaned = textwrap.dedent(str(content)).strip()
+
+    st.markdown(
+        cleaned,
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# API
 # ============================================================
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -430,11 +589,10 @@ def get_json(url):
         response = requests.get(
             url,
             headers=HEADERS,
-            timeout=20,
+            timeout=25,
         )
 
         response.raise_for_status()
-
         return response.json()
 
     except Exception:
@@ -454,8 +612,7 @@ def get_league_page(
     page,
 ):
     url = (
-        f"{BASE}/leagues-classic/"
-        f"{league_id}/standings/"
+        f"{BASE}/leagues-classic/{league_id}/standings/"
         f"?page_new_entries=1"
         f"&page_standings={page}"
         f"&phase=1"
@@ -465,9 +622,7 @@ def get_league_page(
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_manager_history(
-    manager_id,
-):
+def get_manager_history(manager_id):
     return get_json(
         f"{BASE}/entry/{manager_id}/history/"
     )
@@ -484,16 +639,14 @@ def get_manager_picks(
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_live_gameweek(
-    gw,
-):
+def get_live_gameweek(gw):
     return get_json(
         f"{BASE}/event/{gw}/live/"
     )
 
 
 # ============================================================
-# GENERAL HELPERS
+# HELPERS
 # ============================================================
 
 def safe_int(
@@ -506,27 +659,29 @@ def safe_int(
         return default
 
 
-def clean_text(
-    text,
-):
+def clean_text(text):
     if text is None:
         return ""
 
-    return str(text).replace(
-        "\x00",
-        "",
-    ).strip()
+    return (
+        str(text)
+        .replace("\x00", "")
+        .strip()
+    )
 
 
-def get_current_gameweek(
-    data,
-):
+def get_current_gameweek(data):
+
+    if not data:
+        return 1
+
     events = data.get(
         "events",
         [],
     )
 
     for event in events:
+
         if event.get("is_current"):
             return safe_int(
                 event.get("id"),
@@ -545,13 +700,8 @@ def get_current_gameweek(
     )
 
 
-# ============================================================
-# PLAYER LOOKUP
-# ============================================================
+def build_player_lookup(data):
 
-def build_player_lookup(
-    data,
-):
     teams = {
         safe_int(t.get("id")):
         t.get("name", "?")
@@ -565,19 +715,19 @@ def build_player_lookup(
         [],
     ):
 
-        player_id = safe_int(
+        pid = safe_int(
             player.get("id")
         )
 
-        players[player_id] = {
+        players[pid] = {
             "name":
-                f'{player.get("first_name", "")} '
-                f'{player.get("second_name", "")}'.strip(),
+                f"{player.get('first_name', '')} "
+                f"{player.get('second_name', '')}".strip(),
 
             "short_name":
                 player.get(
                     "web_name",
-                    "?",
+                    "?"
                 ),
 
             "team":
@@ -585,21 +735,18 @@ def build_player_lookup(
                     safe_int(
                         player.get("team")
                     ),
-                    "?",
+                    "?"
                 ),
 
             "position":
-                safe_int(
-                    player.get(
-                        "element_type"
-                    )
+                player.get(
+                    "element_type"
                 ),
 
             "price":
-                safe_int(
-                    player.get(
-                        "now_cost"
-                    )
+                player.get(
+                    "now_cost",
+                    0
                 ) / 10,
 
             "total_points":
@@ -613,13 +760,8 @@ def build_player_lookup(
     return players
 
 
-# ============================================================
-# LIVE POINTS
-# ============================================================
+def build_live_points(live):
 
-def build_live_points(
-    live,
-):
     result = {}
 
     if not live:
@@ -627,19 +769,19 @@ def build_live_points(
 
     for item in live.get(
         "elements",
-        [],
+        []
     ):
 
-        player_id = safe_int(
+        pid = safe_int(
             item.get("id")
         )
 
         stats = item.get(
             "stats",
-            {},
+            {}
         )
 
-        result[player_id] = {
+        result[pid] = {
             "points":
                 safe_int(
                     stats.get(
@@ -679,24 +821,20 @@ def build_live_points(
     return result
 
 
-# ============================================================
-# LOAD ALL LEAGUE MANAGERS
-# ============================================================
-
 def get_all_league_managers(
-    league_id,
+    league_id
 ):
 
     all_results = []
 
     for page in range(
         1,
-        21,
+        21
     ):
 
         data = get_league_page(
             league_id,
-            page,
+            page
         )
 
         if not data:
@@ -721,13 +859,9 @@ def get_all_league_managers(
     return all_results
 
 
-# ============================================================
-# PICK HELPERS
-# ============================================================
-
 def player_name(
     pick,
-    players,
+    players
 ):
 
     if not pick:
@@ -747,51 +881,39 @@ def player_name(
 
 def pick_points(
     pick,
-    live_points,
+    live_points
 ):
 
     if not pick:
         return 0
 
-    player_id = safe_int(
+    pid = safe_int(
         pick.get("element")
     )
 
     return safe_int(
         live_points
-        .get(
-            player_id,
-            {},
-        )
-        .get(
-            "points",
-            0,
-        )
+        .get(pid, {})
+        .get("points", 0)
     )
 
 
 def pick_minutes(
     pick,
-    live_points,
+    live_points
 ):
 
     if not pick:
         return 0
 
-    player_id = safe_int(
+    pid = safe_int(
         pick.get("element")
     )
 
     return safe_int(
         live_points
-        .get(
-            player_id,
-            {},
-        )
-        .get(
-            "minutes",
-            0,
-        )
+        .get(pid, {})
+        .get("minutes", 0)
     )
 
 
@@ -803,7 +925,7 @@ def analyse_manager(
     manager,
     gw,
     players,
-    live_points,
+    live_points
 ):
 
     manager_id = safe_int(
@@ -816,7 +938,7 @@ def analyse_manager(
 
     picks_data = get_manager_picks(
         manager_id,
-        gw,
+        gw
     )
 
     if not history or not picks_data:
@@ -826,7 +948,7 @@ def analyse_manager(
 
     for event in history.get(
         "current",
-        [],
+        []
     ):
 
         if safe_int(
@@ -841,7 +963,7 @@ def analyse_manager(
 
     picks = picks_data.get(
         "picks",
-        [],
+        []
     )
 
     if not picks:
@@ -866,17 +988,15 @@ def analyse_manager(
             p for p in picks
             if p.get("is_captain")
         ),
-        None,
+        None
     )
 
     original_vice = next(
         (
             p for p in picks
-            if p.get(
-                "is_vice_captain"
-            )
+            if p.get("is_vice_captain")
         ),
-        None,
+        None
     )
 
     actual_captain = next(
@@ -886,36 +1006,34 @@ def analyse_manager(
                 p.get("multiplier")
             ) == 2
         ),
-        original_captain,
+        original_captain
     )
 
     captain_name = player_name(
         original_captain,
-        players,
+        players
     )
 
     actual_captain_name = player_name(
         actual_captain,
-        players,
+        players
     )
 
     captain_raw_points = pick_points(
         original_captain,
-        live_points,
-    )
-
-    actual_captain_points = pick_points(
-        actual_captain,
-        live_points,
+        live_points
     )
 
     captain_effective = (
-        actual_captain_points * 2
+        pick_points(
+            actual_captain,
+            live_points
+        ) * 2
     )
 
     captain_minutes = pick_minutes(
         original_captain,
-        live_points,
+        live_points
     )
 
     unused_bench = [
@@ -928,7 +1046,7 @@ def analyse_manager(
     bench_points = sum(
         pick_points(
             p,
-            live_points,
+            live_points
         )
         for p in unused_bench
     )
@@ -936,14 +1054,13 @@ def analyse_manager(
     biggest_bench = None
 
     if unused_bench:
-
         biggest_bench = max(
             unused_bench,
             key=lambda p:
                 pick_points(
                     p,
-                    live_points,
-                ),
+                    live_points
+                )
         )
 
     transfers = safe_int(
@@ -968,7 +1085,7 @@ def analyse_manager(
         current_history.get(
             "last_rank"
         ),
-        rank,
+        rank
     )
 
     rank_change = (
@@ -990,27 +1107,25 @@ def analyse_manager(
     calculated_team_points = sum(
         pick_points(
             p,
-            live_points,
+            live_points
         )
         * max(
             safe_int(
                 p.get("multiplier")
             ),
-            0,
+            0
         )
         for p in picks
     )
 
     return {
-
-        "id":
-            manager_id,
+        "id": manager_id,
 
         "name":
             clean_text(
                 manager.get(
                     "player_name",
-                    "Unknown",
+                    "Unknown"
                 )
             ),
 
@@ -1018,15 +1133,13 @@ def analyse_manager(
             clean_text(
                 manager.get(
                     "entry_name",
-                    "Unknown",
+                    "Unknown"
                 )
             ),
 
         "league_position":
             safe_int(
-                manager.get(
-                    "rank"
-                )
+                manager.get("rank")
             ),
 
         "gw_points":
@@ -1062,7 +1175,7 @@ def analyse_manager(
         "vice":
             player_name(
                 original_vice,
-                players,
+                players
             ),
 
         "bench_points":
@@ -1071,18 +1184,14 @@ def analyse_manager(
         "biggest_bench":
             player_name(
                 biggest_bench,
-                players,
+                players
             ),
 
         "biggest_bench_points":
-            (
-                pick_points(
-                    biggest_bench,
-                    live_points,
-                )
-                if biggest_bench
-                else 0
-            ),
+            pick_points(
+                biggest_bench,
+                live_points
+            ) if biggest_bench else 0,
 
         "transfers":
             transfers,
@@ -1093,26 +1202,21 @@ def analyse_manager(
         "calculated_team_points":
             calculated_team_points,
 
-        "starting_names":
-            [
-                player_name(
-                    p,
-                    players,
-                )
-                for p in starting
-            ],
+        "starting_names": [
+            player_name(
+                p,
+                players
+            )
+            for p in starting
+        ],
     }
 
-
-# ============================================================
-# ANALYSE LEAGUE
-# ============================================================
 
 def analyse_league(
     managers,
     gw,
     players,
-    live_points,
+    live_points
 ):
 
     analysed = []
@@ -1129,7 +1233,7 @@ def analyse_league(
             manager,
             gw,
             players,
-            live_points,
+            live_points
         )
 
         if result:
@@ -1139,10 +1243,8 @@ def analyse_league(
 
         progress.progress(
             int(
-                (
-                    (i + 1)
-                    / max(total, 1)
-                )
+                ((i + 1) /
+                 max(total, 1))
                 * 100
             )
         )
@@ -1156,15 +1258,12 @@ def analyse_league(
 # AWARDS
 # ============================================================
 
-def get_awards(
-    df,
-):
+def get_awards(df):
 
     if df.empty:
         return {}
 
     return {
-
         "manager":
             df.loc[
                 df["gw_points"].idxmax()
@@ -1177,55 +1276,39 @@ def get_awards(
 
         "captain":
             df.loc[
-                df[
-                    "captain_effective"
-                ].idxmax()
+                df["captain_effective"].idxmax()
             ],
 
         "captain_bad":
             df.loc[
-                df[
-                    "captain_effective"
-                ].idxmin()
+                df["captain_effective"].idxmin()
             ],
 
         "bench":
             df.loc[
-                df[
-                    "bench_points"
-                ].idxmax()
+                df["bench_points"].idxmax()
             ],
 
         "riser":
             df.loc[
-                df[
-                    "rank_change"
-                ].idxmax()
+                df["rank_change"].idxmax()
             ],
 
         "faller":
             df.loc[
-                df[
-                    "rank_change"
-                ].idxmin()
+                df["rank_change"].idxmin()
             ],
 
         "transfer":
             df.loc[
-                df[
-                    "transfers"
-                ].idxmax()
+                df["transfers"].idxmax()
             ],
     }
 
 
-# ============================================================
-# BANter
-# ============================================================
-
 def local_banter(
     row,
-    award,
+    award
 ):
 
     name = row["name"]
@@ -1239,36 +1322,39 @@ def local_banter(
         return (
             f"{name} takes Manager of the Week "
             f"with {points} points. "
-            f"Somebody check whether they've "
-            f"suddenly started reading the rules."
+            f"Somebody check whether they've secretly "
+            f"started reading the rules."
         )
 
     if award == "disaster":
 
         return (
-            f"{name} finishes bottom of the "
-            f"weekly pile with just {points} points. "
-            f"A performance that will definitely "
-            f"be blamed on 'bad luck'."
+            f"{name} finishes bottom of the weekly pile "
+            f"with just {points} points. "
+            f"Expect the words 'unlucky' and 'fixture swing' "
+            f"to appear repeatedly in the group chat."
         )
 
     if award == "captain":
 
         return (
-            f"{name} got the captaincy spot on. "
-            f"{row['actual_captain']} delivered "
+            f"{name} trusted "
+            f"{row['actual_captain']} "
+            f"and collected "
             f"{safe_int(row['captain_effective'])} "
-            f"effective points."
+            f"effective captain points. "
+            f"Tactical genius."
         )
 
     if award == "captain_bad":
 
         return (
-            f"{name} trusted {row['captain']} "
-            f"as captain and got "
+            f"{name} handed the armband to "
+            f"{row['captain']} "
+            f"and collected just "
             f"{safe_int(row['captain_effective'])} "
             f"effective points. "
-            f"Bold. Very bold."
+            f"A brave decision. A terrible one, but brave."
         )
 
     if award == "bench":
@@ -1276,7 +1362,7 @@ def local_banter(
         return (
             f"{name} left "
             f"{safe_int(row['bench_points'])} "
-            f"points unused on the bench. "
+            f"points sitting on the bench. "
             f"That's not squad depth. "
             f"That's self-sabotage."
         )
@@ -1286,8 +1372,7 @@ def local_banter(
         return (
             f"{name} climbs "
             f"{abs(safe_int(row['rank_change']))} "
-            f"places. Suddenly the title race "
-            f"looks very interesting."
+            f"places. The title race has just got interesting."
         )
 
     if award == "faller":
@@ -1295,14 +1380,15 @@ def local_banter(
         return (
             f"{name} drops "
             f"{abs(safe_int(row['rank_change']))} "
-            f"places. The less said, the better."
+            f"places. Somebody might want to check "
+            f"whether the manager is still awake."
         )
 
     return ""
 
 
 # ============================================================
-# GEMINI CLIENT
+# GEMINI
 # ============================================================
 
 def get_gemini_client():
@@ -1327,26 +1413,24 @@ def get_gemini_client():
     if not api_key:
         return None
 
-    return genai.Client(
-        api_key=api_key
-    )
+    try:
+        return genai.Client(
+            api_key=api_key
+        )
+    except Exception:
+        return None
 
-
-# ============================================================
-# AI NEWSPAPER
-# ============================================================
 
 def generate_ai_review(
     league_name,
     gw,
     df,
-    awards,
+    awards
 ):
 
     client = get_gemini_client()
 
     if not client:
-
         return (
             None,
             "Gemini API key is not configured."
@@ -1361,7 +1445,6 @@ def generate_ai_review(
     for key, row in awards.items():
 
         award_data[key] = {
-
             "name":
                 row["name"],
 
@@ -1381,230 +1464,163 @@ def generate_ai_review(
 
             "captain_effective":
                 safe_int(
-                    row[
-                        "captain_effective"
-                    ]
+                    row["captain_effective"]
                 ),
 
             "bench_points":
                 safe_int(
-                    row[
-                        "bench_points"
-                    ]
-                ),
-
-            "biggest_bench":
-                row[
-                    "biggest_bench"
-                ],
-
-            "biggest_bench_points":
-                safe_int(
-                    row[
-                        "biggest_bench_points"
-                    ]
+                    row["bench_points"]
                 ),
 
             "rank_change":
                 safe_int(
-                    row[
-                        "rank_change"
-                    ]
+                    row["rank_change"]
                 ),
 
             "transfers":
                 safe_int(
-                    row[
-                        "transfers"
-                    ]
-                ),
-
-            "transfer_cost":
-                safe_int(
-                    row[
-                        "transfer_cost"
-                    ]
+                    row["transfers"]
                 ),
         }
 
-
     prompt = f"""
-You are the editor of a hilarious British
-fantasy football newspaper.
+You are the editor of a funny British fantasy football
+newspaper called THE MINI-LEAGUE TIMES.
 
-NEWSPAPER:
-THE MINI-LEAGUE TIMES
+Write the Gameweek {gw} edition for:
 
-LEAGUE:
 {league_name}
 
-GAMEWEEK:
-{gw}
-
-Write a fun, competitive newspaper using
-ONLY the supplied FPL data.
-
 IMPORTANT:
-Never invent a score.
-Never invent a player.
-Never invent a transfer.
-Never invent a manager decision.
-Never claim a real person said something
-unless it is clearly labelled as fictional
-newspaper banter.
+Use ONLY the supplied FPL data.
 
-The tone should be:
+Never invent:
+- scores
+- players
+- managers
+- transfers
+- ranks
+- events
 
-- British football banter
+Tone:
 - funny
+- British football banter
 - competitive
 - cheeky
 - occasionally savage
 - never genuinely nasty
 - never discriminatory
-- attack FPL decisions, not people's
-personal lives or identities
+- attack FPL decisions, not people's personal lives
 
-Create the following sections:
+The newspaper should feel like a proper tabloid sports paper.
+
+Include these sections:
 
 1. BIG FRONT PAGE HEADLINE
 
-Give the Gameweek a dramatic headline.
+A dramatic headline based on the biggest story.
 
-2. THE BIG STORY
-
-Explain what happened at the top of the
-Gameweek leaderboard.
-
-3. MANAGER OF THE WEEK
+2. MANAGER OF THE WEEK
 
 Praise the winner.
 
-4. DISASTERCLASS OF THE WEEK
+3. DISASTERCLASS
 
-Make fun of the lowest scorer.
+Roast the lowest scorer.
 
-5. CAPTAINCY CORNER
+4. CAPTAINCY CORNER
 
-Compare the best and worst captain decisions.
+Discuss the best and worst captaincy choices.
 
-6. BENCH OF SHAME
+5. BENCH BLUNDER
 
-Highlight the manager who left the most
-unused points on the bench.
+Discuss the manager who left the most unused points
+on the bench.
 
-7. THE TITLE RACE
+6. THE TITLE RACE
 
-Discuss the top of the league and whether
-the leader looks safe.
+Discuss the top of the league and the points gap.
 
-8. HOT FORM
+7. THE BATTLE AT THE BOTTOM
 
-Identify managers whose combination of
-weekly points and rank movement suggests
-they are on the rise.
+Discuss the bottom of the league.
 
-9. COLD FORM
+8. TRANSFER DESK
 
-Identify managers who appear to be struggling.
+Discuss the manager who made the most transfers.
 
-10. FRAUD WATCH
+9. FRAUD WATCH
 
-Choose one manager only if the supplied data
-gives a genuinely funny FPL reason.
+Choose a manager only if the supplied data gives you
+a genuinely funny FPL reason.
 
-11. VAR INVESTIGATION
+Keep it playful.
 
-Pick the most questionable FPL decision
-from the supplied data.
+10. THE FINAL WHISTLE
 
-12. FAN INTERVIEW
+Finish with a funny closing paragraph.
 
-This is VERY IMPORTANT.
+11. FAN INTERVIEW
 
-Create a short fictional interview with
-a passionate fan of ONE manager whose
-decision-making deserves criticism.
+Include a very short fictional supporter interview.
 
-The interview should contain:
+The supporter should be a passionate mini-league fan.
 
-REPORTER:
-A question about the manager's decision.
+The interview must specifically criticise one manager's
+FPL decision-making.
 
-FAN:
-A funny answer.
+For example:
+- terrible captain choice
+- leaving points on the bench
+- unnecessary transfers
+- dropping down the league
+- bizarre decision making
 
-REPORTER:
-A second question.
+The fan interview should be about 150-200 words.
 
-FAN:
-A second funny answer.
+Format the interview like:
 
-Then give:
+### FAN INTERVIEW
 
-VERDICT:
-[1 to 5 stars]
+**Reporter:** ...
 
-The fan interview must be clearly presented
-as newspaper-style fictional banter.
+**Fan:** ...
 
-Base it on actual supplied data such as:
-- poor captain
-- bench points
-- transfer activity
-- poor weekly score
-- rank fall
+**Reporter:** ...
 
-Do NOT invent events.
+**Fan:** ...
 
-13. OFFICIAL EXCUSE OF THE WEEK
+Use specific real data from the supplied information.
 
-Create a funny fictional excuse that the
-manager could supposedly use.
+Do NOT pretend the fan is a real person.
+Make it obvious that this is a humorous fictional
+mini-league supporter.
 
-Clearly label it as fictional banter.
+Write approximately 900-1200 words.
 
-14. BACK PAGE
+DATA:
 
-Finish with one final funny story.
-
-Make the whole article feel like a proper
-football newspaper rather than an AI report.
-
-Use short paragraphs and strong headings.
-
-Aim for approximately 1200-1600 words.
-
-LEAGUE DATA:
-{json.dumps(
-    records,
-    ensure_ascii=False,
-    indent=2
-)}
+{json.dumps(records, ensure_ascii=False, indent=2)}
 
 AWARDS:
-{json.dumps(
-    award_data,
-    ensure_ascii=False,
-    indent=2
-)}
+
+{json.dumps(award_data, ensure_ascii=False, indent=2)}
 """
 
     try:
 
         response = client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=prompt,
+            contents=prompt
         )
 
         text = getattr(
             response,
             "text",
-            None,
+            None
         )
 
         if not text:
-
             return (
                 None,
                 "Gemini returned an empty response."
@@ -1612,15 +1628,108 @@ AWARDS:
 
         return (
             text.strip(),
-            None,
+            None
         )
 
     except Exception as e:
 
         return (
             None,
-            str(e),
+            str(e)
         )
+
+
+# ============================================================
+# FALLBACK FAN INTERVIEW
+# ============================================================
+
+def create_fallback_fan_interview(
+    df,
+    awards
+):
+
+    target = awards["disaster"]
+
+    name = target["name"]
+
+    points = safe_int(
+        target["gw_points"]
+    )
+
+    captain = target["captain"]
+
+    captain_points = safe_int(
+        target["captain_effective"]
+    )
+
+    bench = safe_int(
+        target["bench_points"]
+    )
+
+    if bench > captain_points:
+
+        criticism = (
+            f"leaving {bench} points on the bench"
+        )
+
+    else:
+
+        criticism = (
+            f"handing the captaincy to "
+            f"{captain}"
+        )
+
+    return {
+        "target":
+            name,
+
+        "intro":
+            (
+                "This week's fictional supporter has "
+                "strong opinions about the tactical "
+                "decision-making on display."
+            ),
+
+        "qa": [
+
+            (
+                "Reporter",
+                f"{name} had a difficult week. "
+                f"What went wrong?"
+            ),
+
+            (
+                "Fan",
+                f"What went wrong? Pretty much everything. "
+                f"They scored only {points} points and somehow "
+                f"still looked surprised by the result."
+            ),
+
+            (
+                "Reporter",
+                "What was the biggest tactical mistake?"
+            ),
+
+            (
+                "Fan",
+                f"I'd say {criticism}. "
+                f"At this level, you can't just make decisions "
+                f"and hope the FPL gods sort it out."
+            ),
+
+            (
+                "Reporter",
+                "Would you trust this manager next week?"
+            ),
+
+            (
+                "Fan",
+                "Trust them? Absolutely. "
+                "Trust their decision-making? "
+                "That's a completely different question."
+            ),
+        ]
+    }
 
 
 # ============================================================
@@ -1631,6 +1740,8 @@ def article_to_pdf(
     article,
     league_name,
     gw,
+    df,
+    awards
 ):
 
     if not REPORTLAB_AVAILABLE:
@@ -1641,10 +1752,10 @@ def article_to_pdf(
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        rightMargin=16 * mm,
-        leftMargin=16 * mm,
-        topMargin=15 * mm,
-        bottomMargin=15 * mm,
+        rightMargin=14 * mm,
+        leftMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
     )
 
     styles = getSampleStyleSheet()
@@ -1652,37 +1763,47 @@ def article_to_pdf(
     title_style = ParagraphStyle(
         "NewspaperTitle",
         parent=styles["Title"],
-        alignment=TA_CENTER,
         fontName="Helvetica-Bold",
         fontSize=25,
         leading=28,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor(
+            "#111827"
+        ),
         spaceAfter=6,
     )
 
     subtitle_style = ParagraphStyle(
-        "NewspaperSubtitle",
-        parent=styles["Heading2"],
+        "Subtitle",
+        parent=styles["Normal"],
+        fontSize=11,
+        leading=14,
         alignment=TA_CENTER,
-        fontSize=12,
-        leading=15,
+        textColor=colors.HexColor(
+            "#555555"
+        ),
         spaceAfter=12,
     )
 
-    body_style = ParagraphStyle(
-        "NewspaperBody",
-        parent=styles["BodyText"],
-        fontSize=9.8,
-        leading=14,
-        spaceAfter=7,
+    headline_style = ParagraphStyle(
+        "Headline",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=19,
+        leading=22,
+        textColor=colors.HexColor(
+            "#111827"
+        ),
+        spaceBefore=10,
+        spaceAfter=8,
     )
 
-    heading_style = ParagraphStyle(
-        "NewspaperHeading",
-        parent=styles["Heading2"],
-        fontSize=15,
-        leading=18,
-        spaceBefore=10,
-        spaceAfter=6,
+    body_style = ParagraphStyle(
+        "Body",
+        parent=styles["BodyText"],
+        fontSize=9.5,
+        leading=13.5,
+        spaceAfter=7,
     )
 
     story = []
@@ -1690,27 +1811,172 @@ def article_to_pdf(
     story.append(
         Paragraph(
             "THE MINI-LEAGUE TIMES",
-            title_style,
+            title_style
         )
     )
 
     story.append(
         Paragraph(
-            f"Gameweek {gw} • "
-            f"{html.escape(league_name)}",
-            subtitle_style,
+            f"GAMEWEEK {gw} • "
+            f"{clean_text(league_name)}",
+            subtitle_style
         )
     )
 
     story.append(
         HRFlowable(
             width="100%",
-            thickness=2,
+            thickness=3,
+            color=colors.HexColor(
+                "#111827"
+            ),
             spaceBefore=3,
-            spaceAfter=10,
+            spaceAfter=12,
         )
     )
 
+    winner = awards["manager"]
+
+    story.append(
+        Paragraph(
+            html_lib.escape(
+                f"{winner['name']} TAKES "
+                f"GAMEWEEK HONOURS"
+            ),
+            headline_style
+        )
+    )
+
+    story.append(
+        Paragraph(
+            html_lib.escape(
+                f"{safe_int(winner['gw_points'])} points "
+                f"puts {winner['name']} top of the "
+                f"weekly leaderboard."
+            ),
+            body_style
+        )
+    )
+
+    # Award table
+    award_rows = [
+        [
+            "🏆 MANAGER",
+            "💀 DISASTER",
+            "🎯 CAPTAIN"
+        ],
+        [
+            winner["name"],
+            awards["disaster"]["name"],
+            awards["captain"]["name"]
+        ],
+        [
+            f"{safe_int(winner['gw_points'])} pts",
+            f"{safe_int(awards['disaster']['gw_points'])} pts",
+            f"{safe_int(awards['captain']['captain_effective'])} pts"
+        ],
+    ]
+
+    table = Table(
+        award_rows,
+        colWidths=[
+            58 * mm,
+            58 * mm,
+            58 * mm
+        ]
+    )
+
+    table.setStyle(
+        TableStyle([
+            (
+                "BACKGROUND",
+                (0, 0),
+                (-1, 0),
+                colors.HexColor("#111827")
+            ),
+            (
+                "TEXTCOLOR",
+                (0, 0),
+                (-1, 0),
+                colors.white
+            ),
+            (
+                "FONTNAME",
+                (0, 0),
+                (-1, 0),
+                "Helvetica-Bold"
+            ),
+            (
+                "FONTNAME",
+                (0, 1),
+                (-1, -1),
+                "Helvetica-Bold"
+            ),
+            (
+                "FONTSIZE",
+                (0, 0),
+                (-1, -1),
+                9
+            ),
+            (
+                "ALIGN",
+                (0, 0),
+                (-1, -1),
+                "CENTER"
+            ),
+            (
+                "VALIGN",
+                (0, 0),
+                (-1, -1),
+                "MIDDLE"
+            ),
+            (
+                "BACKGROUND",
+                (0, 1),
+                (-1, -1),
+                colors.HexColor("#fffdf5")
+            ),
+            (
+                "BOX",
+                (0, 0),
+                (-1, -1),
+                1,
+                colors.HexColor("#111827")
+            ),
+            (
+                "INNERGRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                colors.HexColor("#d1d5db")
+            ),
+            (
+                "TOPPADDING",
+                (0, 0),
+                (-1, -1),
+                7
+            ),
+            (
+                "BOTTOMPADDING",
+                (0, 0),
+                (-1, -1),
+                7
+            ),
+        ])
+    )
+
+    story.append(
+        table
+    )
+
+    story.append(
+        Spacer(
+            1,
+            10
+        )
+    )
+
+    # Convert article
     for raw_line in article.splitlines():
 
         line = clean_text(
@@ -1721,13 +1987,31 @@ def article_to_pdf(
             story.append(
                 Spacer(
                     1,
-                    4,
+                    4
                 )
             )
             continue
 
-        safe = html.escape(
+        safe = (
             line
+            .replace(
+                "&",
+                "&amp;"
+            )
+            .replace(
+                "<",
+                "&lt;"
+            )
+            .replace(
+                ">",
+                "&gt;"
+            )
+        )
+
+        safe = re.sub(
+            r"\*\*(.*?)\*\*",
+            r"<b>\1</b>",
+            safe
         )
 
         if safe.startswith(
@@ -1737,7 +2021,17 @@ def article_to_pdf(
             story.append(
                 Paragraph(
                     safe[4:],
-                    heading_style,
+                    ParagraphStyle(
+                        "H3",
+                        parent=styles["Heading3"],
+                        fontName="Helvetica-Bold",
+                        fontSize=13,
+                        textColor=colors.HexColor(
+                            "#9a3412"
+                        ),
+                        spaceBefore=9,
+                        spaceAfter=5,
+                    )
                 )
             )
 
@@ -1748,7 +2042,17 @@ def article_to_pdf(
             story.append(
                 Paragraph(
                     safe[3:],
-                    heading_style,
+                    ParagraphStyle(
+                        "H2",
+                        parent=styles["Heading2"],
+                        fontName="Helvetica-Bold",
+                        fontSize=15,
+                        textColor=colors.HexColor(
+                            "#111827"
+                        ),
+                        spaceBefore=10,
+                        spaceAfter=6,
+                    )
                 )
             )
 
@@ -1759,24 +2063,52 @@ def article_to_pdf(
             story.append(
                 Paragraph(
                     safe[2:],
-                    heading_style,
+                    headline_style
                 )
             )
 
         else:
 
-            safe = re.sub(
-                r"\*\*(.*?)\*\*",
-                r"<b>\1</b>",
-                safe,
-            )
-
             story.append(
                 Paragraph(
                     safe,
-                    body_style,
+                    body_style
                 )
             )
+
+    # Footer
+    story.append(
+        Spacer(
+            1,
+            12
+        )
+    )
+
+    story.append(
+        HRFlowable(
+            width="100%",
+            thickness=2,
+            color=colors.HexColor(
+                "#111827"
+            )
+        )
+    )
+
+    story.append(
+        Spacer(
+            1,
+            6
+        )
+    )
+
+    story.append(
+        Paragraph(
+            f"The Mini-League Times • "
+            f"Official FPL data • "
+            f"Gameweek {gw}",
+            subtitle_style
+        )
+    )
 
     doc.build(
         story
@@ -1787,21 +2119,16 @@ def article_to_pdf(
     return buffer.getvalue()
 
 
-# ============================================================
-# TXT
-# ============================================================
-
 def article_to_txt(
     article,
     league_name,
-    gw,
+    gw
 ):
 
     heading = (
         "THE MINI-LEAGUE TIMES\n"
-        f"{league_name}\n"
-        f"GAMEWEEK {gw}\n"
-        + "=" * 65
+        f"{league_name} — Gameweek {gw}\n"
+        + "=" * 60
         + "\n\n"
     )
 
@@ -1813,41 +2140,14 @@ def article_to_txt(
 
 
 # ============================================================
-# MASTHEAD
+# SESSION STATE
 # ============================================================
 
-selected_league_name = st.session_state.get(
-    "selected_league",
-    "Dad V Lad",
-)
+if "selected_league" not in st.session_state:
 
-selected_league_id = LEAGUES[
-    selected_league_name
-]
-
-
-st.markdown(
-    f"""
-    <div class="masthead">
-
-        <div class="masthead-title">
-            THE MINI-LEAGUE TIMES
-        </div>
-
-        <div class="masthead-subtitle">
-            WHERE YOUR MATES' FPL MISTAKES BECOME PUBLIC KNOWLEDGE
-        </div>
-
-        <div class="edition-row">
-            <span>EST. 2026</span>
-            <span>{selected_league_name}</span>
-            <span>FANTASY FOOTBALL EDITION</span>
-        </div>
-
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    st.session_state[
+        "selected_league"
+    ] = "Dad V Lad"
 
 
 # ============================================================
@@ -1858,24 +2158,25 @@ st.sidebar.markdown(
     "## 📰 Newspaper Settings"
 )
 
-st.sidebar.markdown(
-    "### Choose your mini-league"
-)
-
-
-league_choice = st.sidebar.selectbox(
-    "Mini-League",
+selected_league = st.sidebar.selectbox(
+    "Choose your mini-league",
     list(LEAGUES.keys()),
     index=list(
         LEAGUES.keys()
     ).index(
-        selected_league_name
+        st.session_state[
+            "selected_league"
+        ]
     ),
 )
 
+league_id = LEAGUES[
+    selected_league
+]
 
+# If league changes, clear previous analysis.
 if (
-    league_choice
+    selected_league
     != st.session_state.get(
         "selected_league"
     )
@@ -1883,43 +2184,40 @@ if (
 
     st.session_state[
         "selected_league"
-    ] = league_choice
+    ] = selected_league
 
-    st.session_state.pop(
+    for key in [
         "league_df",
-        None,
-    )
-
-    st.session_state.pop(
         "article",
-        None,
-    )
-
-    st.session_state.pop(
         "ai_error",
-        None,
-    )
+        "fan_interview",
+    ]:
+
+        st.session_state.pop(
+            key,
+            None
+        )
 
     st.rerun()
 
 
-league_id = LEAGUES[
-    league_choice
-]
-
-
-st.sidebar.success(
-    f"**{league_choice}**\n\n"
-    f"League ID: `{league_id}`"
+render_html(
+    f"""
+    <div class="story-card"
+         style="background:#ecfdf5;border-color:#86efac;">
+        <h3>📰 {html_lib.escape(selected_league)}</h3>
+        <b>League ID:</b> {league_id}
+    </div>
+    """
 )
-
-
-st.sidebar.markdown("---")
 
 st.sidebar.markdown(
-    "### ⚙️ Gameweek"
+    "---"
 )
 
+st.sidebar.markdown(
+    "## ⚙️ Gameweek"
+)
 
 gw_override = st.sidebar.number_input(
     "Gameweek",
@@ -1928,37 +2226,34 @@ gw_override = st.sidebar.number_input(
     value=1,
 )
 
-
 use_current = st.sidebar.checkbox(
     "Use current Gameweek automatically",
     value=True,
 )
 
-
-st.sidebar.markdown("---")
-
 if st.sidebar.button(
-    "🔄 Clear Cached Data",
-    use_container_width=True,
+    "🔄 Clear cached data"
 ):
 
     st.cache_data.clear()
 
-    st.session_state.pop(
+    for key in [
         "league_df",
-        None,
-    )
-
-    st.session_state.pop(
         "article",
-        None,
-    )
+        "ai_error",
+        "fan_interview",
+    ]:
+
+        st.session_state.pop(
+            key,
+            None
+        )
 
     st.rerun()
 
 
 # ============================================================
-# LOAD FPL
+# LOAD BOOTSTRAP
 # ============================================================
 
 bootstrap = get_bootstrap()
@@ -1966,7 +2261,7 @@ bootstrap = get_bootstrap()
 if not bootstrap:
 
     st.error(
-        "Could not connect to the official FPL API."
+        "Could not connect to the FPL API."
     )
 
     st.stop()
@@ -1987,71 +2282,105 @@ gw = (
 )
 
 
-st.markdown(
+# ============================================================
+# NEWSPAPER HEADER
+# ============================================================
+
+render_html(
     f"""
-    <div class="ticker">
-        ⚽ BREAKING: The {selected_league_name}
+    <div class="newspaper">
+
+        <div class="masthead-title">
+            THE MINI-LEAGUE TIMES
+        </div>
+
+        <div class="masthead-subtitle">
+            Where your mates' FPL mistakes become public knowledge
+        </div>
+
+        <div class="edition-row">
+            <span>EST. 2026</span>
+            <span>{html_lib.escape(selected_league)}</span>
+            <span>FANTASY FOOTBALL EDITION</span>
+        </div>
+
+    </div>
+    """
+)
+
+
+render_html(
+    f"""
+    <div class="breaking">
+        ⚽ BREAKING: The {html_lib.escape(selected_league)}
         edition is analysing Gameweek {gw}
         • Official FPL data
     </div>
-    """,
-    unsafe_allow_html=True,
+    """
 )
 
 
 # ============================================================
-# LOAD SELECTED LEAGUE
+# LOAD LEAGUE
 # ============================================================
 
 with st.spinner(
-    f"Loading {selected_league_name}..."
+    f"Loading {selected_league}..."
 ):
 
     league = get_league_page(
         league_id,
-        1,
+        1
     )
-
 
 if not league:
 
     st.error(
-        f"Could not load FPL mini-league "
+        f"Could not load mini-league "
         f"{league_id}."
     )
 
     st.stop()
 
 
-league_name = (
+api_league_name = (
     league
     .get("league", {})
     .get(
         "name"
     )
-    or selected_league_name
+    or selected_league
 )
-
 
 managers = get_all_league_managers(
     league_id
 )
 
-
 if not managers:
 
     st.error(
-        "No managers were found "
-        "in this league."
+        "No managers were found in "
+        "this league."
     )
 
     st.stop()
 
 
-st.info(
-    f"📰 **{league_name}** • "
-    f"**{len(managers)} managers** • "
-    f"League ID **{league_id}**"
+render_html(
+    f"""
+    <div class="story-card"
+         style="background:#eff6ff;border-color:#2563eb;">
+
+        <h3>
+            📰 {html_lib.escape(api_league_name)}
+        </h3>
+
+        <b>{len(managers)}</b>
+        managers • League ID
+        <b>{league_id}</b>
+
+    </div>
+    """
 )
 
 
@@ -2060,48 +2389,43 @@ st.info(
 # ============================================================
 
 if st.button(
-    f"🚀 ANALYSE {selected_league_name.upper()} "
-    f"— GAMEWEEK {gw}",
+    f"🚀 ANALYSE {selected_league.upper()} — GAMEWEEK {gw}",
     type="primary",
     use_container_width=True,
 ):
 
     with st.spinner(
-        "Loading official Gameweek player scores..."
+        "Loading official Gameweek scores..."
     ):
 
         live = get_live_gameweek(
             gw
         )
 
-
     if not live:
 
         st.error(
             "The FPL live Gameweek data "
             "could not be loaded. "
-            "Try again shortly."
+            "Try again in a few seconds."
         )
 
         st.stop()
-
 
     live_points = build_live_points(
         live
     )
 
-
     with st.spinner(
-        f"Analysing all {len(managers)} managers..."
+        f"Analysing {len(managers)} managers..."
     ):
 
         analysed = analyse_league(
             managers,
             gw,
             players,
-            live_points,
+            live_points
         )
-
 
     if not analysed:
 
@@ -2112,11 +2436,9 @@ if st.button(
 
         st.stop()
 
-
     df = pd.DataFrame(
         analysed
     )
-
 
     st.session_state[
         "league_df"
@@ -2124,26 +2446,25 @@ if st.button(
 
     st.session_state[
         "league_name"
-    ] = league_name
+    ] = api_league_name
 
     st.session_state[
         "gw"
     ] = gw
 
     st.session_state[
-        "league_id"
-    ] = league_id
-
-    st.session_state[
         "live_loaded"
     ] = True
 
-
     st.session_state.pop(
         "article",
-        None,
+        None
     )
 
+    st.session_state.pop(
+        "fan_interview",
+        None
+    )
 
     st.success(
         f"Analysis complete — "
@@ -2152,119 +2473,93 @@ if st.button(
 
 
 # ============================================================
-# WELCOME
+# WELCOME SCREEN
 # ============================================================
 
 if "league_df" not in st.session_state:
 
-    st.markdown(
-        """
+    render_html(
+        f"""
         <div class="hero">
 
+            <div class="hero-ball">
+                ⚽
+            </div>
+
             <div class="hero-kicker">
-                Welcome to the newsroom
+                THE MINI-LEAGUE TIMES
             </div>
 
-            <div class="hero-headline">
-                Your mates have made their FPL decisions.
-                Now they have to answer for them.
+            <div class="hero-title">
+                Welcome to the
+                {html_lib.escape(selected_league)}
+                newsroom.
             </div>
 
-            <div class="hero-score">
-                Choose a league and hit Analyse Gameweek
-                to produce the next edition.
+            <p>
+                Your weekly FPL performance is about to
+                become public knowledge.
+            </p>
+
+            <div class="hero-points">
+                GAMEWEEK {gw}
             </div>
 
         </div>
-        """,
-        unsafe_allow_html=True,
+        """
     )
-
 
     c1, c2, c3 = st.columns(3)
 
     with c1:
 
-        st.markdown(
+        render_html(
             """
-            <div class="card">
-
-                <div class="card-title">
-                    🏆 Awards
-                </div>
-
-                <div class="card-manager">
+            <div class="stat-card">
+                <div class="stat-number">🏆</div>
+                <div class="stat-label">
                     Manager of the Week
                 </div>
-
-                <p>
-                    Captaincy King, Disasterclass,
-                    Bench Blunder and more.
-                </p>
-
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
-
 
     with c2:
 
-        st.markdown(
+        render_html(
             """
-            <div class="card">
-
-                <div class="card-title">
-                    🎙️ Banter
+            <div class="stat-card">
+                <div class="stat-number">💀</div>
+                <div class="stat-label">
+                    Disasterclass
                 </div>
-
-                <div class="card-manager">
-                    Fan Interview
-                </div>
-
-                <p>
-                    A fictional supporter gets
-                    the microphone and starts
-                    asking serious questions.
-                </p>
-
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
-
 
     with c3:
 
-        st.markdown(
+        render_html(
             """
-            <div class="card">
-
-                <div class="card-title">
-                    📰 Newspaper
+            <div class="stat-card">
+                <div class="stat-number">🎙️</div>
+                <div class="stat-label">
+                    Fan Interview
                 </div>
-
-                <div class="card-manager">
-                    Full Edition
-                </div>
-
-                <p>
-                    Gemini turns the week's
-                    FPL chaos into a proper
-                    football newspaper.
-                </p>
-
             </div>
-            """,
-            unsafe_allow_html=True,
+            """
         )
 
+    st.info(
+        f"Press **Analyse {selected_league}** above "
+        f"to generate the Gameweek {gw} newspaper."
+    )
 
     st.stop()
 
 
 # ============================================================
-# RESTORE DATA
+# GET DATA
 # ============================================================
 
 df = st.session_state[
@@ -2279,670 +2574,356 @@ gw = st.session_state[
     "gw"
 ]
 
-league_id = st.session_state[
-    "league_id"
-]
-
-
 awards = get_awards(
     df
 )
 
 
 # ============================================================
-# FRONT PAGE
+# FRONT PAGE HERO
 # ============================================================
 
 winner = awards[
     "manager"
 ]
 
-
-st.markdown(
+render_html(
     f"""
     <div class="hero">
 
+        <div class="hero-ball">
+            ⚽
+        </div>
+
         <div class="hero-kicker">
-            GAMEWEEK {gw} • FRONT PAGE
+            GAMEWEEK {gw} •
+            {html_lib.escape(selected_league)}
         </div>
 
-        <div class="hero-headline">
-            🏆 {winner["name"]}
-            OWNS GAMEWEEK {gw}
-        </div>
-
-        <div class="hero-score">
-            {safe_int(winner["gw_points"])}
-            points puts {winner["name"]}
-            top of the weekly leaderboard.
+        <div class="hero-title">
+            {html_lib.escape(winner["name"])}
+            TAKES GAMEWEEK HONOURS
         </div>
 
         <p>
-            <b>{winner["team_name"]}</b>
-            • League position:
-            <b>{safe_int(winner["league_position"])}</b>
+            The weekly leaderboard belongs to
+            <b>{html_lib.escape(winner["name"])}</b>.
         </p>
 
+        <div class="hero-points">
+            {safe_int(winner["gw_points"])} POINTS
+        </div>
+
     </div>
-    """,
-    unsafe_allow_html=True,
+    """
 )
 
 
 # ============================================================
-# PODIUM
+# WEEKLY PODIUM
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">🏆 The Weekly Podium</div>',
-    unsafe_allow_html=True,
+    '<div class="section-title">🏆 THE WEEKLY PODIUM</div>',
+    unsafe_allow_html=True
 )
-
 
 weekly = df.sort_values(
     "gw_points",
-    ascending=False,
+    ascending=False
 ).head(3)
 
+if len(weekly) >= 3:
 
-podium_cols = st.columns(3)
+    first = weekly.iloc[0]
+    second = weekly.iloc[1]
+    third = weekly.iloc[2]
 
-podium_emojis = [
-    "🥇",
-    "🥈",
-    "🥉",
-]
+    render_html(
+        f"""
+        <div class="podium-wrap">
 
+            <div class="podium-title">
+                🏆 GAMEWEEK PODIUM
+            </div>
 
-for i, (_, row) in enumerate(
-    weekly.iterrows()
-):
+            <div class="podium">
 
-    with podium_cols[i]:
-
-        st.markdown(
-            f"""
-            <div class="podium-card">
-
-                <div class="podium-place">
-                    {podium_emojis[i]}
+                <div class="podium-box podium-second">
+                    <div class="podium-medal">🥈</div>
+                    <div class="podium-name">
+                        {html_lib.escape(second["name"])}
+                    </div>
+                    <div class="podium-points">
+                        {safe_int(second["gw_points"])}
+                    </div>
+                    <div>points</div>
                 </div>
 
-                <div class="podium-name">
-                    {row["name"]}
+                <div class="podium-box podium-first">
+                    <div class="podium-medal">🥇</div>
+                    <div class="podium-name">
+                        {html_lib.escape(first["name"])}
+                    </div>
+                    <div class="podium-points">
+                        {safe_int(first["gw_points"])}
+                    </div>
+                    <div>points</div>
                 </div>
 
-                <div class="podium-points">
-                    {safe_int(row["gw_points"])}
-                    points
+                <div class="podium-box podium-third">
+                    <div class="podium-medal">🥉</div>
+                    <div class="podium-name">
+                        {html_lib.escape(third["name"])}
+                    </div>
+                    <div class="podium-points">
+                        {safe_int(third["gw_points"])}
+                    </div>
+                    <div>points</div>
                 </div>
 
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+
+        </div>
+        """
+    )
 
 
 # ============================================================
-# WEEKLY AWARDS
+# AWARDS
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">🏅 The Weekly Awards</div>',
-    unsafe_allow_html=True,
+    '<div class="section-title">🎖️ THE WEEKLY AWARDS</div>',
+    unsafe_allow_html=True
 )
 
 
-c1, c2, c3 = st.columns(3)
+def award_html(
+    icon,
+    title,
+    row,
+    number,
+    text,
+    colour
+):
 
+    return f"""
+    <div class="award-card {colour}">
 
-with c1:
-
-    r = awards[
-        "manager"
-    ]
-
-    st.markdown(
-        f"""
-        <div class="card">
-
-            <div class="card-title">
-                🏆 Manager of the Week
-            </div>
-
-            <div class="card-number">
-                {safe_int(r["gw_points"])}
-            </div>
-
-            <div class="card-manager">
-                {r["name"]}
-            </div>
-
-            <div class="card-text">
-                {local_banter(r, "manager")}
-            </div>
-
+        <div class="award-icon">
+            {icon}
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
-
-with c2:
-
-    r = awards[
-        "disaster"
-    ]
-
-    st.markdown(
-        f"""
-        <div class="card">
-
-            <div class="card-title">
-                💀 Disasterclass
-            </div>
-
-            <div class="card-number">
-                {safe_int(r["gw_points"])}
-            </div>
-
-            <div class="card-manager">
-                {r["name"]}
-            </div>
-
-            <div class="card-text">
-                {local_banter(r, "disaster")}
-            </div>
-
+        <div class="award-title">
+            {title}
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
-
-with c3:
-
-    r = awards[
-        "captain"
-    ]
-
-    st.markdown(
-        f"""
-        <div class="card">
-
-            <div class="card-title">
-                🎯 Captaincy King
-            </div>
-
-            <div class="card-number">
-                {safe_int(r["captain_effective"])}
-            </div>
-
-            <div class="card-manager">
-                {r["name"]}
-            </div>
-
-            <div class="card-text">
-                {r["actual_captain"]}
-                actually delivered the captain
-                double.
-            </div>
-
+        <div class="award-number">
+            {number}
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+        <div class="award-manager">
+            {html_lib.escape(row["name"])}
+        </div>
+
+        <div class="award-text">
+            {html_lib.escape(text)}
+        </div>
+
+    </div>
+    """
 
 
 c1, c2, c3 = st.columns(3)
 
-
 with c1:
 
-    r = awards[
-        "captain_bad"
-    ]
+    r = awards["manager"]
 
-    st.markdown(
-        f"""
-        <div class="card">
-
-            <div class="card-title">
-                🤡 Captaincy Disaster
-            </div>
-
-            <div class="card-manager">
-                {r["name"]}
-            </div>
-
-            <div class="card-text">
-
-                Captain:
-                <b>{r["captain"]}</b>
-
-                <br><br>
-
-                Effective points:
-                <b>
-                    {safe_int(
-                        r["captain_effective"]
-                    )}
-                </b>
-
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
+    render_html(
+        award_html(
+            "🏆",
+            "Manager of the Week",
+            r,
+            safe_int(
+                r["gw_points"]
+            ),
+            local_banter(
+                r,
+                "manager"
+            ),
+            "gold"
+        )
     )
-
 
 with c2:
 
-    r = awards[
-        "bench"
-    ]
+    r = awards["disaster"]
 
-    st.markdown(
-        f"""
-        <div class="card">
-
-            <div class="card-title">
-                🪑 Bench of Shame
-            </div>
-
-            <div class="card-number">
-                {safe_int(r["bench_points"])}
-            </div>
-
-            <div class="card-manager">
-                {r["name"]}
-            </div>
-
-            <div class="card-text">
-                Unused points left behind.
-                <br>
-                Biggest regret:
-                <b>{r["biggest_bench"]}</b>
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
+    render_html(
+        award_html(
+            "💀",
+            "Disasterclass",
+            r,
+            safe_int(
+                r["gw_points"]
+            ),
+            local_banter(
+                r,
+                "disaster"
+            ),
+            "red"
+        )
     )
-
 
 with c3:
 
-    r = awards[
-        "faller"
-    ]
+    r = awards["captain"]
+
+    render_html(
+        award_html(
+            "🎯",
+            "Captaincy King",
+            r,
+            safe_int(
+                r["captain_effective"]
+            ),
+            (
+                f"{r['actual_captain']} delivered "
+                f"the captain double."
+            ),
+            "blue"
+        )
+    )
+
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
+
+    r = awards["captain_bad"]
+
+    render_html(
+        award_html(
+            "🤡",
+            "Captaincy Disaster",
+            r,
+            safe_int(
+                r["captain_effective"]
+            ),
+            (
+                f"Captain: {r['captain']}. "
+                f"Effective captain points: "
+                f"{safe_int(r['captain_effective'])}."
+            ),
+            "red"
+        )
+    )
+
+with c2:
+
+    r = awards["bench"]
+
+    render_html(
+        award_html(
+            "🪑",
+            "Bench Blunder",
+            r,
+            safe_int(
+                r["bench_points"]
+            ),
+            (
+                f"{safe_int(r['bench_points'])} "
+                f"unused points left behind."
+            ),
+            "orange"
+        )
+    )
+
+with c3:
+
+    r = awards["riser"]
 
     movement = safe_int(
         r["rank_change"]
     )
 
-    st.markdown(
-        f"""
-        <div class="card">
-
-            <div class="card-title">
-                📉 Biggest Faller
-            </div>
-
-            <div class="card-number">
-                {abs(movement)}
-            </div>
-
-            <div class="card-manager">
-                {r["name"]}
-            </div>
-
-            <div class="card-text">
-                Overall rank movement.
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# ============================================================
-# TITLE RACE
-# ============================================================
-
-st.markdown(
-    '<div class="section-title">🥊 The Title Race</div>',
-    unsafe_allow_html=True,
-)
-
-
-title = df.sort_values(
-    "league_position"
-).head(5)
-
-
-for _, row in title.iterrows():
-
-    position = safe_int(
-        row["league_position"]
-    )
-
-    total = safe_int(
-        row["total_points"]
-    )
-
-    st.progress(
-        max(
-            0.01,
-            min(
-                1.0,
-                total /
-                max(
-                    safe_int(
-                        title.iloc[0][
-                            "total_points"
-                        ]
-                    ),
-                    1,
-                ),
+    render_html(
+        award_html(
+            "📈",
+            "Biggest Riser",
+            r,
+            (
+                f"+{movement}"
+                if movement >= 0
+                else str(movement)
             ),
-        ),
-        text=(
-            f"{position}. "
-            f"{row['name']} — "
-            f"{total} points"
-        ),
-    )
-
-
-if len(title) >= 2:
-
-    gap = (
-        safe_int(
-            title.iloc[0][
-                "total_points"
-            ]
+            (
+                "Places climbed in the overall "
+                "rankings."
+            ),
+            "green"
         )
-        -
-        safe_int(
-            title.iloc[1][
-                "total_points"
-            ]
-        )
-    )
-
-    st.info(
-        f"🥊 **{title.iloc[0]['name']}** "
-        f"leads **{title.iloc[1]['name']}** "
-        f"by **{gap} points**."
     )
 
 
 # ============================================================
-# HOT / COLD FORM
+# FAN INTERVIEW
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">🔥 Form Guide</div>',
-    unsafe_allow_html=True,
+    '<div class="section-title">🎙️ FAN INTERVIEW</div>',
+    unsafe_allow_html=True
 )
 
-
-form_hot = df.sort_values(
-    [
-        "rank_change",
-        "gw_points",
-    ],
-    ascending=False,
-).head(3)
-
-
-form_cold = df.sort_values(
-    [
-        "rank_change",
-        "gw_points",
-    ],
-    ascending=True,
-).head(3)
-
-
-c1, c2 = st.columns(2)
-
-
-with c1:
-
-    st.markdown(
-        "### 🔥 HOT"
-    )
-
-    for _, row in form_hot.iterrows():
-
-        st.markdown(
-            f"""
-            <div class="form-hot">
-
-                <b>{row["name"]}</b>
-
-                <br>
-
-                {safe_int(row["gw_points"])}
-                GW points
-
-                •
-                {'+' if safe_int(row["rank_change"]) >= 0 else ''}
-                {safe_int(row["rank_change"])}
-                rank movement
-
-            </div>
-
-            <br>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-with c2:
-
-    st.markdown(
-        "### 🧊 COLD"
-    )
-
-    for _, row in form_cold.iterrows():
-
-        st.markdown(
-            f"""
-            <div class="form-cold">
-
-                <b>{row["name"]}</b>
-
-                <br>
-
-                {safe_int(row["gw_points"])}
-                GW points
-
-                •
-                {safe_int(row["rank_change"])}
-                rank movement
-
-            </div>
-
-            <br>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
-# ============================================================
-# FRAUD WATCH
-# ============================================================
-
-st.markdown(
-    '<div class="section-title">🚨 Fraud Watch</div>',
-    unsafe_allow_html=True,
+fan = create_fallback_fan_interview(
+    df,
+    awards
 )
 
+qa_html = ""
 
-worst = awards[
-    "disaster"
-]
+for speaker, answer in fan["qa"]:
 
-captain_bad = awards[
-    "captain_bad"
-]
+    if speaker == "Reporter":
 
-bench_bad = awards[
-    "bench"
-]
-
-
-fraud_candidates = []
-
-
-if worst["gw_points"] == df[
-    "gw_points"
-].min():
-
-    fraud_candidates.append(
-        worst
-    )
-
-
-if (
-    captain_bad[
-        "captain_effective"
-    ]
-    <= 4
-):
-
-    fraud_candidates.append(
-        captain_bad
-    )
-
-
-if (
-    bench_bad[
-        "bench_points"
-    ]
-    >= 8
-):
-
-    fraud_candidates.append(
-        bench_bad
-    )
-
-
-if fraud_candidates:
-
-    fraud = fraud_candidates[0]
-
-    st.markdown(
-        f"""
-        <div class="card-dark">
-
-            <div class="card-title">
-                🚨 UNDER INVESTIGATION
-            </div>
-
-            <div class="card-number">
-                {fraud["name"]}
-            </div>
-
-            <div class="card-text">
-
-                The Mini-League Times
-                editorial team has opened an
-                investigation following a
-                suspicious FPL decision.
-
-                <br><br>
-
-                Captain:
-                <b>{fraud["captain"]}</b>
-
-                <br>
-
-                GW points:
-                <b>{safe_int(fraud["gw_points"])}</b>
-
-                <br>
-
-                Bench points:
-                <b>{safe_int(fraud["bench_points"])}</b>
-
-            </div>
-
+        qa_html += f"""
+        <div class="question">
+            🎤 {html_lib.escape(answer)}
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        """
 
-else:
+    else:
 
-    st.info(
-        "Nobody has earned a full Fraud Watch investigation this week. Yet."
-    )
+        qa_html += f"""
+        <div class="answer">
+            🗣️ {html_lib.escape(answer)}
+        </div>
+        """
 
+render_html(
+    f"""
+    <div class="interview">
 
-# ============================================================
-# WOODEN SPOON
-# ============================================================
+        <div class="interview-header">
+            🎙️ THE MINI-LEAGUE FAN ZONE
+        </div>
 
-st.markdown(
-    '<div class="section-title">🥄 Wooden Spoon Watch</div>',
-    unsafe_allow_html=True,
+        <div class="interview-person">
+            This week's target:
+            {html_lib.escape(fan["target"])}
+        </div>
+
+        <p>
+            {html_lib.escape(fan["intro"])}
+        </p>
+
+        {qa_html}
+
+    </div>
+    """
 )
-
-
-bottom = df.sort_values(
-    "league_position",
-    ascending=False,
-).head(3)
-
-
-c1, c2, c3 = st.columns(3)
-
-
-for i, (_, row) in enumerate(
-    bottom.iterrows()
-):
-
-    with [
-        c1,
-        c2,
-        c3,
-    ][i]:
-
-        st.markdown(
-            f"""
-            <div class="card">
-
-                <div class="card-title">
-                    Position
-                    {safe_int(
-                        row["league_position"]
-                    )}
-                </div>
-
-                <div class="card-manager">
-                    {row["name"]}
-                </div>
-
-                <div class="card-number">
-                    {safe_int(
-                        row["total_points"]
-                    )}
-                </div>
-
-                <div class="card-text">
-                    Total points
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
 
 
 # ============================================================
@@ -2950,10 +2931,9 @@ for i, (_, row) in enumerate(
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">📰 The Full Newspaper</div>',
-    unsafe_allow_html=True,
+    '<div class="section-title">📰 THE FULL NEWSPAPER</div>',
+    unsafe_allow_html=True
 )
-
 
 if not GEMINI_AVAILABLE:
 
@@ -2967,7 +2947,7 @@ else:
     if get_gemini_client():
 
         st.success(
-            f"Gemini AI connected — {GEMINI_MODEL}"
+            f"🤖 Gemini AI connected — {GEMINI_MODEL}"
         )
 
     else:
@@ -2979,22 +2959,21 @@ else:
 
 
 if st.button(
-    "📰 WRITE THIS WEEK'S NEWSPAPER",
+    "📰 WRITE THE FULL NEWSPAPER",
     type="primary",
-    use_container_width=True,
+    use_container_width=True
 ):
 
     with st.spinner(
-        "The journalists are arguing over the headlines..."
+        "🖋️ The journalists are writing..."
     ):
 
         article, error = generate_ai_review(
             league_name,
             gw,
             df,
-            awards,
+            awards
         )
-
 
     if article:
 
@@ -3004,7 +2983,7 @@ if st.button(
 
         st.session_state.pop(
             "ai_error",
-            None,
+            None
         )
 
         st.rerun()
@@ -3015,8 +2994,7 @@ if st.button(
             "ai_error"
         ] = (
             error
-            or
-            "Unknown Gemini error."
+            or "Unknown Gemini error."
         )
 
 
@@ -3024,12 +3002,13 @@ if "ai_error" in st.session_state:
 
     st.error(
         "Gemini could not write the newspaper.\n\n"
-        f"Error: {st.session_state['ai_error']}"
+        f"Error: {st.session_state['ai_error']}\n\n"
+        "If this says 429 or 503, try again shortly."
     )
 
 
 # ============================================================
-# DISPLAY AI NEWSPAPER
+# SHOW AI ARTICLE
 # ============================================================
 
 if "article" in st.session_state:
@@ -3038,61 +3017,50 @@ if "article" in st.session_state:
         "article"
     ]
 
-
-    st.markdown(
-        """
-        <div class="card">
-        """,
-        unsafe_allow_html=True,
+    render_html(
+        '<div class="article">'
     )
-
 
     st.markdown(
         article
     )
 
-
-    st.markdown(
-        "</div>",
-        unsafe_allow_html=True,
+    render_html(
+        '</div>'
     )
 
-
-    # ========================================================
+    # --------------------------------------------------------
     # DOWNLOADS
-    # ========================================================
+    # --------------------------------------------------------
 
     st.markdown(
-        "### 📥 Download Edition"
+        '<div class="section-title">📥 DOWNLOAD THE NEWSPAPER</div>',
+        unsafe_allow_html=True
     )
-
 
     txt_data = article_to_txt(
         article,
         league_name,
-        gw,
+        gw
     )
 
+    c1, c2 = st.columns(2)
 
-    d1, d2 = st.columns(2)
-
-
-    with d1:
+    with c1:
 
         st.download_button(
             "📄 Download TXT",
             data=txt_data,
             file_name=(
                 f"mini_league_times_"
-                f"{league_name.replace(' ', '_')}_"
+                f"{selected_league.replace(' ', '_')}_"
                 f"gw{gw}.txt"
             ),
             mime="text/plain",
-            use_container_width=True,
+            use_container_width=True
         )
 
-
-    with d2:
+    with c2:
 
         if REPORTLAB_AVAILABLE:
 
@@ -3100,27 +3068,291 @@ if "article" in st.session_state:
                 article,
                 league_name,
                 gw,
+                df,
+                awards
             )
 
-
             st.download_button(
-                "📰 Download PDF",
+                "📰 Download Designed PDF",
                 data=pdf_data,
                 file_name=(
                     f"mini_league_times_"
-                    f"{league_name.replace(' ', '_')}_"
+                    f"{selected_league.replace(' ', '_')}_"
                     f"gw{gw}.pdf"
                 ),
                 mime="application/pdf",
-                use_container_width=True,
+                use_container_width=True
             )
 
         else:
 
             st.info(
-                "Add reportlab to requirements.txt "
-                "to enable PDF downloads."
+                "Install reportlab to enable the "
+                "designed PDF."
             )
+
+
+# ============================================================
+# FRAUD WATCH
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">🚨 FRAUD WATCH</div>',
+    unsafe_allow_html=True
+)
+
+worst = awards[
+    "disaster"
+]
+
+captain_bad = awards[
+    "captain_bad"
+]
+
+if (
+    worst["id"]
+    == captain_bad["id"]
+):
+
+    render_html(
+        f"""
+        <div class="fraud">
+
+            <h2>
+                🚨 FRAUD WATCH: UNDER INVESTIGATION
+            </h2>
+
+            <h1>
+                {html_lib.escape(worst["name"])}
+            </h1>
+
+            <p>
+                Bottom of the week AND captaincy disaster.
+                The evidence is mounting.
+            </p>
+
+            <p>
+                <b>
+                    Charges:
+                </b>
+                questionable decision-making,
+                suspicious tactical choices and
+                general FPL incompetence.
+            </p>
+
+            <p>
+                Verdict:
+                <b>GUILTY OF BAD FPL MANAGEMENT.</b>
+            </p>
+
+        </div>
+        """
+    )
+
+else:
+
+    render_html(
+        """
+        <div class="story-card"
+             style="background:#ecfdf5;border-color:#22c55e;">
+
+            <h2>🚨 Fraud Watch</h2>
+
+            <p>
+                Nobody has earned a full Fraud Watch
+                investigation this week.
+            </p>
+
+            <b>
+                But we're watching...
+            </b>
+
+        </div>
+        """
+    )
+
+
+# ============================================================
+# TITLE RACE
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">🥊 THE TITLE RACE</div>',
+    unsafe_allow_html=True
+)
+
+title = df.sort_values(
+    "league_position"
+).head(5)
+
+title_rows = ""
+
+for _, r in title.iterrows():
+
+    position = safe_int(
+        r["league_position"]
+    )
+
+    title_rows += f"""
+    <div style="
+        display:flex;
+        justify-content:space-between;
+        padding:9px 0;
+        border-bottom:1px solid rgba(255,255,255,.2);
+    ">
+        <span>
+            <b>{position}.</b>
+            {html_lib.escape(r["name"])}
+        </span>
+
+        <b>
+            {safe_int(r["total_points"])} pts
+        </b>
+    </div>
+    """
+
+render_html(
+    f"""
+    <div class="title-race">
+
+        <h2>
+            🥊 WHO WANTS THE CROWN?
+        </h2>
+
+        {title_rows}
+
+    </div>
+    """
+)
+
+if len(title) >= 2:
+
+    gap = (
+        safe_int(
+            title.iloc[0]["total_points"]
+        )
+        -
+        safe_int(
+            title.iloc[1]["total_points"]
+        )
+    )
+
+    st.success(
+        f"👑 {title.iloc[0]['name']} leads "
+        f"{title.iloc[1]['name']} by "
+        f"{gap} points."
+    )
+
+
+# ============================================================
+# WOODEN SPOON
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">🥄 WOODEN SPOON WATCH</div>',
+    unsafe_allow_html=True
+)
+
+bottom = df.sort_values(
+    "league_position",
+    ascending=False
+).head(3)
+
+bottom_rows = ""
+
+for _, r in bottom.iterrows():
+
+    bottom_rows += f"""
+    <div style="
+        display:flex;
+        justify-content:space-between;
+        padding:10px 0;
+        border-bottom:1px solid rgba(255,255,255,.2);
+    ">
+
+        <span>
+            <b>{safe_int(r["league_position"])}.</b>
+            {html_lib.escape(r["name"])}
+        </span>
+
+        <b>
+            {safe_int(r["total_points"])} pts
+        </b>
+
+    </div>
+    """
+
+render_html(
+    f"""
+    <div class="wooden-spoon">
+
+        <h2>
+            🥄 THE BATTLE NOBODY WANTS TO WIN
+        </h2>
+
+        {bottom_rows}
+
+        <p>
+            Somebody has to finish last.
+            Unfortunately, these three are currently
+            volunteering.
+        </p>
+
+    </div>
+    """
+)
+
+
+# ============================================================
+# TRANSFER DESK
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">💰 TRANSFER DESK</div>',
+    unsafe_allow_html=True
+)
+
+transfer = awards[
+    "transfer"
+]
+
+render_html(
+    f"""
+    <div class="story-card">
+
+        <h2>
+            💰 TRANSFER ACTIVITY
+        </h2>
+
+        <h3>
+            {html_lib.escape(transfer["name"])}
+        </h3>
+
+        <p>
+            Made
+            <b>
+                {safe_int(transfer["transfers"])}
+            </b>
+            transfers this Gameweek.
+        </p>
+
+        <p>
+            Transfer hit:
+            <b>
+                -{safe_int(transfer["transfer_cost"])}
+            </b>
+        </p>
+
+        <p>
+            The question is whether this was
+            <i>master planning</i>
+            or
+            <i>panic shopping</i>.
+        </p>
+
+    </div>
+    """
+)
 
 
 # ============================================================
@@ -3128,34 +3360,27 @@ if "article" in st.session_state:
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">📊 The League Table</div>',
-    unsafe_allow_html=True,
+    '<div class="section-title">📊 THE LEAGUE TABLE</div>',
+    unsafe_allow_html=True
 )
-
 
 table = df.sort_values(
     "league_position"
 ).copy()
 
-
-table[
-    "Movement"
-] = table[
-    "rank_change"
-].apply(
-
-    lambda x:
-        f"⬆️ {safe_int(x)}"
-        if safe_int(x) > 0
-
-        else
-        (
-            f"⬇️ {abs(safe_int(x))}"
-            if safe_int(x) < 0
-            else "—"
-        )
+table["Movement"] = (
+    table["rank_change"]
+    .apply(
+        lambda x:
+            f"⬆️ {safe_int(x)}"
+            if safe_int(x) > 0
+            else (
+                f"⬇️ {abs(safe_int(x))}"
+                if safe_int(x) < 0
+                else "—"
+            )
+    )
 )
-
 
 display = table[
     [
@@ -3168,7 +3393,6 @@ display = table[
     ]
 ].copy()
 
-
 display.columns = [
     "Pos",
     "Manager",
@@ -3177,7 +3401,6 @@ display.columns = [
     "Total",
     "Movement",
 ]
-
 
 st.dataframe(
     display,
@@ -3191,110 +3414,166 @@ st.dataframe(
 # ============================================================
 
 st.markdown(
-    '<div class="section-title">🔎 Manager Spotlight</div>',
-    unsafe_allow_html=True,
+    '<div class="section-title">🔎 MANAGER SPOTLIGHT</div>',
+    unsafe_allow_html=True
 )
-
 
 selected_manager = st.selectbox(
     "Choose a manager",
-    df[
-        "name"
-    ].tolist(),
+    df["name"].tolist()
 )
-
 
 manager = df[
     df["name"]
-    ==
-    selected_manager
+    == selected_manager
 ].iloc[0]
 
 
 c1, c2, c3, c4 = st.columns(4)
 
+with c1:
 
-c1.metric(
-    "GW Points",
-    safe_int(
-        manager[
-            "gw_points"
-        ]
-    ),
-)
+    render_html(
+        f"""
+        <div class="stat-card">
+
+            <div class="stat-number">
+                {safe_int(manager["gw_points"])}
+            </div>
+
+            <div class="stat-label">
+                GAMEWEEK POINTS
+            </div>
+
+        </div>
+        """
+    )
+
+with c2:
+
+    render_html(
+        f"""
+        <div class="stat-card">
+
+            <div class="stat-number">
+                {safe_int(manager["total_points"])}
+            </div>
+
+            <div class="stat-label">
+                TOTAL POINTS
+            </div>
+
+        </div>
+        """
+    )
+
+with c3:
+
+    render_html(
+        f"""
+        <div class="stat-card">
+
+            <div class="stat-number">
+                🎯
+            </div>
+
+            <div class="stat-label">
+                {html_lib.escape(manager["captain"])}
+            </div>
+
+        </div>
+        """
+    )
+
+with c4:
+
+    render_html(
+        f"""
+        <div class="stat-card">
+
+            <div class="stat-number">
+                {safe_int(manager["bench_points"])}
+            </div>
+
+            <div class="stat-label">
+                UNUSED BENCH POINTS
+            </div>
+
+        </div>
+        """
+    )
 
 
-c2.metric(
-    "Total",
-    safe_int(
-        manager[
-            "total_points"
-        ]
-    ),
-)
-
-
-c3.metric(
-    "Captain",
-    manager[
-        "captain"
-    ],
-)
-
-
-c4.metric(
-    "Unused Bench",
-    safe_int(
-        manager[
-            "bench_points"
-        ]
-    ),
-)
-
-
-st.markdown(
+render_html(
     f"""
-    **Captain:** {manager["captain"]}
+    <div class="story-card">
 
-    **Actual captain double:**
-    {manager["actual_captain"]}
+        <h3>
+            🧑‍💼 {html_lib.escape(manager["name"])}
+        </h3>
 
-    **Effective captain points:**
-    {safe_int(manager["captain_effective"])}
+        <p>
+            <b>Team:</b>
+            {html_lib.escape(manager["team_name"])}
+        </p>
 
-    **Vice Captain:**
-    {manager["vice"]}
+        <p>
+            <b>Captain:</b>
+            {html_lib.escape(manager["captain"])}
+            ({safe_int(manager["captain_effective"])}
+            effective points)
+        </p>
 
-    **Transfers:**
-    {safe_int(manager["transfers"])}
+        <p>
+            <b>Actual captain double:</b>
+            {html_lib.escape(manager["actual_captain"])}
+        </p>
 
-    **Transfer Hit:**
-    -{safe_int(manager["transfer_cost"])}
+        <p>
+            <b>Vice Captain:</b>
+            {html_lib.escape(manager["vice"])}
+        </p>
 
-    **Biggest unused bench regret:**
-    {manager["biggest_bench"]}
-    ({safe_int(manager["biggest_bench_points"])} points)
+        <p>
+            <b>Transfers:</b>
+            {safe_int(manager["transfers"])}
+            |
+            <b>Hit:</b>
+            -{safe_int(manager["transfer_cost"])}
+        </p>
 
-    **Starting XI:**
-    {", ".join(manager["starting_names"])}
+        <p>
+            <b>Biggest bench regret:</b>
+            {html_lib.escape(manager["biggest_bench"])}
+            ({safe_int(manager["biggest_bench_points"])} points)
+        </p>
+
+        <p>
+            <b>Starting XI:</b>
+            {html_lib.escape(
+                ", ".join(
+                    manager["starting_names"]
+                )
+            )}
+        </p>
+
+    </div>
     """
 )
 
 
 # ============================================================
-# DATA ACCURACY CHECK
+# DATA ACCURACY
 # ============================================================
 
 with st.expander(
-    "🔧 Data Accuracy Check"
+    "🔧 Data accuracy check"
 ):
 
     st.caption(
-        "This compares the official FPL Gameweek "
-        "score with the score reconstructed from "
-        "the returned picks."
+        "The official FPL history score is always used "
+        "for the league and newspaper."
     )
-
 
     check = df[
         [
@@ -3308,48 +3587,35 @@ with st.expander(
         ]
     ].copy()
 
-
-    check[
-        "Difference"
-    ] = (
-        check[
-            "gw_points"
-        ]
+    check["Difference"] = (
+        check["gw_points"]
         -
-        check[
-            "calculated_team_points"
-        ]
+        check["calculated_team_points"]
     )
-
 
     st.dataframe(
         check,
         use_container_width=True,
-        hide_index=True,
+        hide_index=True
     )
 
-
     mismatches = check[
-        check[
-            "Difference"
-        ] != 0
+        check["Difference"] != 0
     ]
-
 
     if mismatches.empty:
 
         st.success(
-            "All reconstructed team scores "
-            "match the official FPL Gameweek scores."
+            "All reconstructed scores match "
+            "the official FPL Gameweek scores."
         )
 
     else:
 
         st.warning(
             f"{len(mismatches)} manager(s) have "
-            "a score difference. The official "
-            "FPL history score is always used "
-            "for league rankings."
+            f"a score difference. The official "
+            f"FPL history score remains authoritative."
         )
 
 
@@ -3357,30 +3623,26 @@ with st.expander(
 # FOOTER
 # ============================================================
 
-today = datetime.now().strftime(
-    "%d %B %Y"
-)
-
-
-st.markdown(
+render_html(
     f"""
     <div class="footer">
 
-        THE MINI-LEAGUE TIMES
-
-        • {league_name}
-
-        • Gameweek {gw}
-
-        • League ID {league_id}
-
-        • {today}
+        📰 <b>THE MINI-LEAGUE TIMES</b>
 
         <br><br>
 
-        Official FPL data • Newspaper banter generated with AI
+        {html_lib.escape(selected_league)}
+        • League {league_id}
+        • Gameweek {gw}
+
+        <br>
+
+        Official data from the Fantasy Premier League API
+
+        <br><br>
+
+        "Where your mates' FPL mistakes become public knowledge."
 
     </div>
-    """,
-    unsafe_allow_html=True,
+    """
 )
